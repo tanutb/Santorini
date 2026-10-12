@@ -1,0 +1,13 @@
+.venv/
+node_modules/
+dist/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/
+logs/
+.env
+.npm-cache/
+checkpoints/*/snapshots/
+*.tmp
+/checkpoints

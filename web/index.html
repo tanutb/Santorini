@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#cfe5ee">
+  <meta name="description" content="Play classic Santorini on a 3D island against a friend online, at one screen, or against a PPO-trained agent.">
+  <title>Santorini</title>
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+  <link rel="preload" href="/static/fonts/commissioner-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/marcellus-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="modulepreload" href="/static/vendor/three.js">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <svg width="0" height="0" class="sprite" aria-hidden="true">
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-turn-left" viewBox="0 0 24 24"><path d="M4 8v5h5"/><path d="M4.6 13A8 8 0 1 0 7 6.3"/></symbol>
+    <symbol id="i-turn-right" viewBox="0 0 24 24"><path d="M20 8v5h-5"/><path d="M19.4 13A8 8 0 1 1 17 6.3"/></symbol>
+    <symbol id="i-recenter" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="m17 9 5 6M22 9l-5 6"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></symbol>
+    <symbol id="i-replay" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3c.6 4.6 2.4 6.4 7 7-4.6.6-6.4 2.4-7 7-.6-4.6-2.4-6.4-7-7 4.6-.6 6.4-2.4 7-7z"/></symbol>
+  </svg>
+
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="Santorini, back to the lobby">
+      <svg viewBox="0 0 40 40" aria-hidden="true"><path class="dome" d="M9 19a8 8 0 0 1 16 0z"/><path d="M8 34V20h18v14M26 34V25h8v9M4 34h33M17 10V6M14.5 34v-7h5v7"/></svg>
+      <span>Santorini</span>
+    </a>
+    <nav aria-label="Help">
+      <button class="link-button" id="rules-button" type="button">How to play</button>
+      <button class="link-button" id="agent-button" type="button">About the agent</button>
+    </nav>
+  </header>
+
+  <main class="stage">
+    <section class="board-area" aria-label="Game board">
+      <div class="board-frame" id="board-frame">
+        <canvas id="board" aria-label="Santorini island. Click a highlighted square to play. With the board focused, arrow keys move a cursor and Enter selects." aria-describedby="hover-label"></canvas>
+        <div class="status-card" id="status-card" role="status" aria-live="polite" aria-atomic="true">
+          <span class="status-piece" id="status-piece" aria-hidden="true"></span>
+          <div><strong id="turn-title">Choose how to play</strong><span id="turn-description">Start a game from the panel. The island is yours to explore.</span></div>
+        </div>
+        <ol class="phase-steps" id="phase-steps" aria-label="Turn steps">
+          <li data-phase="place">Place</li><li data-phase="move">Move</li><li data-phase="build">Build</li>
+        </ol>
+        <div class="camera-tools" role="toolbar" aria-label="Camera">
+          <button class="tool" id="zoom-out" type="button" aria-label="Zoom out" title="Zoom out"><svg><use href="#i-minus"/></svg></button>
+          <button class="tool" id="zoom-in" type="button" aria-label="Zoom in" title="Zoom in"><svg><use href="#i-plus"/></svg></button>
+          <button class="tool" id="rotate-left" type="button" aria-label="Turn island left" title="Turn left (Q)"><svg><use href="#i-turn-left"/></svg></button>
+          <button class="tool" id="rotate-right" type="button" aria-label="Turn island right" title="Turn right (E)"><svg><use href="#i-turn-right"/></svg></button>
+          <button class="tool" id="reset-view" type="button" aria-label="Reset view" title="Reset view (0)"><svg><use href="#i-recenter"/></svg></button>
+        </div>
+        <div class="action-note" id="action-feedback" hidden><span class="action-mark" id="action-icon" aria-hidden="true"></span><div><strong id="action-title"></strong><span id="action-detail"></span></div></div>
+        <div class="board-notice" id="board-notice" hidden></div>
+        <div class="loading-note" id="loading-note">Raising the island…</div>
+        <section class="result-card" id="result-card" hidden aria-labelledby="result-title">
+          <h2 id="result-title"></h2>
+          <p id="result-detail"></p>
+          <div class="result-actions">
+            <button class="button primary" id="result-rematch" type="button">Play again</button>
+            <button class="button quiet" id="result-lobby" type="button">Back to lobby</button>
+          </div>
+        </section>
+      </div>
+      <div class="board-bar">
+        <span class="hover-label" id="hover-label" aria-live="polite"></span>
+        <div class="bar-tools">
+          <button class="tool" id="sound-toggle" type="button" aria-pressed="false" aria-label="Sound" title="Sound"><svg><use href="#i-mute"/></svg></button>
+          <label class="quality">Graphics
+            <select id="quality-select">
+              <option value="auto">Auto</option><option value="high">High</option><option value="economy">Battery saver</option>
+            </select>
+          </label>
+          <button class="tool" id="grid-toggle" type="button" aria-expanded="false" aria-controls="accessible-board" aria-label="Square list" title="Square list"><svg><use href="#i-grid"/></svg></button>
+        </div>
+      </div>
+      <div class="grid-panel" id="accessible-board" hidden>
+        <p>Every square as a button. Choose a worker, then a highlighted square.</p>
+        <div id="cell-grid" class="cell-grid" role="group" aria-label="Board squares"></div>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+      <section class="lobby" id="lobby">
+        <h1>Santorini</h1>
+        <p class="lede">Move one worker, then build beside it. Step up onto a third-level tower to win.</p>
+        <label class="field-label" for="player-name">Your name</label>
+        <input id="player-name" maxlength="24" autocomplete="nickname" placeholder="Island builder">
+        <div class="modes" role="radiogroup" aria-label="Opponent">
+          <button class="mode" type="button" role="radio" data-mode="ai" aria-checked="true">
+            <span class="mode-name">Play the agent</span><span class="mode-note">A PPO-trained opponent, with hints if you want them</span>
+          </button>
+          <button class="mode" type="button" role="radio" data-mode="online" aria-checked="false">
+            <span class="mode-name">Play a friend online</span><span class="mode-note">Share a room code; the game survives a refresh</span>
+          </button>
+          <button class="mode" type="button" role="radio" data-mode="local" aria-checked="false">
+            <span class="mode-name">Pass and play</span><span class="mode-note">Two players take turns on this screen</span>
+          </button>
+        </div>
+        <div class="strength" id="strength" hidden>
+          <span class="field-label" id="strength-label">Agent strength</span>
+          <div class="strength-options" id="strength-options" role="radiogroup" aria-labelledby="strength-label"></div>
+          <p class="note" id="strength-note"></p>
+        </div>
+        <button class="button primary wide" id="start-button" type="button">Start game</button>
+        <form id="join-form" class="join">
+          <label class="field-label" for="room-code">Have a room code?</label>
+          <div class="join-row">
+            <input id="room-code" maxlength="6" placeholder="ABC234" pattern="[A-Za-z0-9]{6}" required autocomplete="off" spellcheck="false">
+            <button type="submit" class="button">Join</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="room" id="room-panel" hidden>
+        <div class="room-head">
+          <h2 id="room-mode">Game</h2>
+          <span class="connection" id="connection-status">Connecting</span>
+        </div>
+        <div class="room-code"><span>Room</span><strong id="active-code"></strong>
+          <button class="tool" id="copy-button" type="button" aria-label="Copy invitation link" title="Copy invitation link"><svg><use href="#i-copy"/></svg></button>
+        </div>
+        <p class="note" id="room-help"></p>
+      </section>
+
+      <section class="table" aria-label="Players">
+        <div class="player" id="player-0"><span class="piece coral" aria-hidden="true"></span><div><strong id="player-name-0">You</strong><span id="player-state-0">Coral workers</span></div></div>
+        <div class="player" id="player-1"><span class="piece gold" aria-hidden="true"></span><div><strong id="player-name-1">PPO agent</strong><span id="player-state-1">Gold workers</span></div></div>
+      </section>
+
+      <section class="coach" id="practice-panel" hidden>
+        <h2>Coach</h2>
+        <div class="meter" id="insight" hidden>
+          <div class="meter-head"><span>Position</span><strong id="insight-value"></strong></div>
+          <p class="note" id="insight-note"></p>
+        </div>
+        <ul class="alerts" id="alerts"></ul>
+        <div class="coach-actions">
+          <button class="button" id="hint-button" type="button"><svg aria-hidden="true"><use href="#i-spark"/></svg><span>Suggest a move</span></button>
+          <button class="button quiet" id="replay-button" type="button" disabled><svg aria-hidden="true"><use href="#i-replay"/></svg><span>Replay last action</span></button>
+        </div>
+        <div id="hint-result" class="hint" hidden role="status"><strong id="hint-title"></strong><p id="hint-detail"></p><small>The agent's top choice. You still decide.</small></div>
+      </section>
+
+      <section class="journal" id="history-section" hidden>
+        <div class="journal-head"><h2>Moves</h2><span id="history-count"></span></div>
+        <ol id="history-list"></ol>
+        <div class="journal-actions">
+          <button class="button quiet" id="leave-button" type="button">Back to lobby</button>
+          <button class="button danger" id="resign-button" type="button">Resign</button>
+          <button class="button primary" id="rematch-button" type="button" hidden>Play again</button>
+        </div>
+      </section>
+
+      <footer class="colophon">Classic rules without god powers. An unofficial fan project.</footer>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="rules-dialog" aria-labelledby="rules-title">
+    <button class="tool dialog-close" type="button" aria-label="Close"><svg><use href="#i-plus"/></svg></button>
+    <h2 id="rules-title">How to play</h2>
+    <p>Two players share a 5 × 5 island. Each controls two workers.</p>
+    <ol class="rules">
+      <li><strong>Place.</strong> The first player places both workers on empty squares, then the second player does the same.</li>
+      <li><strong>Move.</strong> On your turn, move one worker to a neighbouring square, diagonals included. You may climb up one level or drop down any number. You cannot enter occupied squares or domes.</li>
+      <li><strong>Build.</strong> The worker you moved builds on a neighbouring empty square: one more level, or a dome on top of level three.</li>
+      <li><strong>Win.</strong> Move up onto level three. You also win if your opponent has no move they can complete.</li>
+    </ol>
+    <p class="note">Teal rings show where you can go. Amber hexagons mark squares where your opponent could win next turn; dome them if you can. Ctrl + scroll zooms, Q and E turn the island.</p>
+    <button class="button primary wide dialog-done" type="button">Back to the island</button>
+  </dialog>
+
+  <dialog id="agent-dialog" aria-labelledby="agent-title">
+    <button class="tool dialog-close" type="button" aria-label="Close"><svg><use href="#i-plus"/></svg></button>
+    <h2 id="agent-title">About the agent</h2>
+    <p>The agent is a neural network trained with our own PyTorch implementation of PPO-Clip. Illegal moves are masked out, so every choice it makes comes from the network's learned preferences, never from a scripted rule.</p>
+    <div class="stats" id="agent-stats"></div>
+    <h3>How it fares</h3>
+    <p class="note">Win rates over seat-balanced games against fixed opponents: random moves, a simple tactical player, and a one-move lookahead search.</p>
+    <div id="evaluation-results"></div>
+    <div id="level-section" hidden>
+      <h3>Strengths</h3>
+      <p class="note">Lighter opponents are earlier agents from this project's training history: the first network trained, and an early checkpoint of the current one.</p>
+      <div id="level-results"></div>
+    </div>
+    <button class="button primary wide dialog-done" type="button">Back to the island</button>
+  </dialog>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-text"></p>
+    <div class="dialog-actions"><button class="button quiet" id="confirm-cancel" type="button">Cancel</button><button class="button primary" id="confirm-accept" type="button">Continue</button></div>
+  </dialog>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
