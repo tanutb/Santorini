@@ -108,7 +108,7 @@ npm run smoke -- http://127.0.0.1:8000     # a real online match over HTTP and W
 
 1. **Website (GitHub Pages):** in the repository's Settings > Pages, set Source to GitHub Actions, then push `main`. `.github/workflows/pages.yml` tests, builds (`node scripts/build.mjs`) and publishes the site.
 2. **Game server (Render):** on render.com choose New > Blueprint and pick this repository; `render.yaml` sets everything up. Set `SANTORINI_ALLOWED_ORIGINS` to the Pages address, for example `https://<user>.github.io`.
-3. **Connect them:** in the GitHub repository, add the variable `SANTORINI_SERVER_URL` with the Render address (Settings > Secrets and variables > Actions > Variables), re-run the Pages workflow, and check it with `npm run smoke -- https://<your-server>`.
+3. **Connect them:** in the GitHub repository, add `SANTORINI_SERVER_URL` with the Render address (Settings > Secrets and variables > Actions, as a secret or a variable), re-run the Pages workflow, and check it with `npm run smoke -- https://<your-server>`.
 
 The free Render plan sleeps after 15 minutes. The site shows "Waking up the game server" while it starts, and the agent and pass and play keep working meanwhile. The server needs only `requirements.txt` (no PyTorch), so any host that keeps one Python process running with WebSockets also works.
 
