@@ -29,6 +29,7 @@
     <nav aria-label="Site">
       <a href="./">Play</a>
       <a href="learn.html" aria-current="page">How it learns</a>
+      <a class="github" href="https://github.com/tanutb/Santorini" target="_blank" rel="noopener" aria-label="GitHub: the source code" title="Source code on GitHub"><svg class="gh-mark" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
     </nav>
   </header>
 
@@ -101,8 +102,50 @@
 
       <section id="numbers">
         <h2>The game as numbers</h2>
-        <p class="takeaway">Each position becomes 230 zeros and ones, always seen from the side about to move.</p>
-        <p>"My" workers and "their" workers, never coral and gold, so one network can play either side.</p>
+        <p class="takeaway">To the learner, Santorini is an environment: it shows 230 zeros and ones, takes one of 75 actions, and pays +1 or −1 when the game ends.</p>
+        <div class="table-wrap">
+          <table class="data spec">
+            <tbody>
+              <tr><th scope="row">Observation space</th><td><code>Box(0, 1, (230,), float32)</code>: 230 numbers, each 0 or 1, from the side about to move</td></tr>
+              <tr><th scope="row">Network input</th><td>the same numbers as 15 × 5 × 5 planes</td></tr>
+              <tr><th scope="row">Action space</th><td><code>Discrete(75)</code>, with a mask of the legal actions</td></tr>
+              <tr><th scope="row">Reward</th><td>+1 for a win, −1 for a loss, 0 on every other step</td></tr>
+              <tr><th scope="row">Episode end</th><td>a win or a loss (terminated), or 400 actions (truncated)</td></tr>
+              <tr><th scope="row">Opponent</th><td>part of the environment: it plays inside <code>step</code>, drawn from the mix in <a href="#play">Playing to learn</a></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>State</h3>
+        <p>A state <math><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math> is the complete game situation, the <code>Game</code> record in <code>server/game.py</code>. Santorini hides nothing, so the observation below contains the whole state, rewritten from the mover's side.</p>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Field</th><th>Values</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>heights</code></td><td>25 integers, 0–4</td><td>each square's level, 0–3; 4 is a dome</td></tr>
+              <tr><td><code>workers</code></td><td>2 × 2 squares; −1 = not placed</td><td>where coral's and gold's two workers stand</td></tr>
+              <tr><td><code>current</code></td><td>0 or 1</td><td>who decides next: coral (0) or gold (1)</td></tr>
+              <tr><td><code>phase</code></td><td>place, move or build</td><td>what kind of action comes next</td></tr>
+              <tr><td><code>selected</code></td><td>0, 1 or −1</td><td>the worker that just moved and must build; −1 if none</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Squares are numbered row by row, with columns A–E as 0–4: <math><semantics><mrow><mi>c</mi><mo>=</mo><mn>5</mn><mspace width="0.1667em"></mspace><mo form="prefix" stretchy="false">(</mo><mtext>row</mtext><mo>−</mo><mn>1</mn><mo form="postfix" stretchy="false">)</mo><mo>+</mo><mtext>column</mtext></mrow><annotation encoding="application/x-tex">c = 5\,(\text{row} - 1) + \text{column}</annotation></semantics></math>.</p>
+        <div class="table-wrap">
+          <table class="data cellmap" aria-label="Square numbers">
+            <thead><tr><th></th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">1</th><td>0</td><td>1</td><td>2</td><td>3</td><td>4</td></tr>
+              <tr><th scope="row">2</th><td>5</td><td>6</td><td>7</td><td>8</td><td>9</td></tr>
+              <tr><th scope="row">3</th><td>10</td><td>11</td><td>12</td><td>13</td><td>14</td></tr>
+              <tr><th scope="row">4</th><td>15</td><td>16</td><td>17</td><td>18</td><td>19</td></tr>
+              <tr><th scope="row">5</th><td>20</td><td>21</td><td>22</td><td>23</td><td>24</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Observation space</h3>
+        <p>230 numbers, each 0 or 1, always from the side about to move: "my" workers and "their" workers, never coral and gold, so one network plays either seat. Number <math><semantics><mrow><mi>i</mi><mo>=</mo><mn>25</mn><mi>k</mi><mo>+</mo><mi>c</mi></mrow><annotation encoding="application/x-tex">i = 25k + c</annotation></semantics></math> is plane <math><semantics><mi>k</mi><annotation encoding="application/x-tex">k</annotation></semantics></math> at square <math><semantics><mi>c</mi><annotation encoding="application/x-tex">c</annotation></semantics></math>.</p>
         <figure class="widget" id="planes-widget">
           <div class="widget-head"><h3>An example position, as the network sees it</h3><span>Hover a plane</span></div>
           <div class="budget" aria-label="230 numbers: 125 for heights, 100 for workers, 5 for flags">
@@ -117,18 +160,98 @@
           </div>
           <figcaption>Each plane is a 5×5 grid of zeros and ones. Gold is to move here, so gold's workers are "mine" and coral's are "theirs". "Moved" marks the worker that must build. The five flags are copied across whole planes, and the edge plane is all ones so the network can tell the board's edge from an empty square.</figcaption>
         </figure>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Index</th><th>Plane</th><th>1 means</th></tr></thead>
+            <tbody>
+              <tr><td>0–24</td><td>Level 0</td><td>the square is at ground level</td></tr>
+              <tr><td>25–49</td><td>Level 1</td><td>the square has one level</td></tr>
+              <tr><td>50–74</td><td>Level 2</td><td>two levels</td></tr>
+              <tr><td>75–99</td><td>Level 3</td><td>three levels: stepping up onto it wins</td></tr>
+              <tr><td>100–124</td><td>Dome</td><td>a dome: nobody can stand or build here</td></tr>
+              <tr><td>125–149</td><td>My worker 1</td><td>my first worker stands here (all 0 until it is placed)</td></tr>
+              <tr><td>150–174</td><td>My worker 2</td><td>my second worker stands here</td></tr>
+              <tr><td>175–199</td><td>Their worker 1</td><td>the opponent's first worker stands here</td></tr>
+              <tr><td>200–224</td><td>Their worker 2</td><td>the opponent's second worker stands here</td></tr>
+              <tr><td>225</td><td>Place</td><td>workers are still being placed</td></tr>
+              <tr><td>226</td><td>Move</td><td>the next action is a move</td></tr>
+              <tr><td>227</td><td>Build</td><td>the next action is a build</td></tr>
+              <tr><td>228</td><td>Moved 1</td><td>my worker 1 just moved, so it must build</td></tr>
+              <tr><td>229</td><td>Moved 2</td><td>my worker 2 just moved, so it must build</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ul>
+          <li>Every square has exactly one height plane at 1, and exactly one of the three phase flags is 1. In the build phase one "moved" flag is 1; otherwise both are 0.</li>
+          <li>Whose turn it is needs no number: the side about to move is always "mine".</li>
+          <li>The move count is not included. The 400-action limit is a truncation, handled in <a href="#numbers-end">Episode end</a>.</li>
+          <li>The networks reshape the 230 numbers into 15 planes of 5 × 5: the 9 board planes, the 5 flags copied onto all 25 squares, and a plane of ones. The convolutions pad the board's border with zeros, and the ones mark which squares are really on the board.</li>
+        </ul>
         <details class="deep">
-          <summary>Show the encoding in detail</summary>
+          <summary>Show all 230 numbers of the example</summary>
           <div class="deep-body">
-            <ul>
-              <li><strong>125 numbers:</strong> five one-hot height planes. A square at level 2 has a 1 on the level-2 plane and 0 on the other four; the fifth plane marks domes.</li>
-              <li><strong>100 numbers:</strong> four worker planes, each with a single 1: my worker 1, my worker 2, their worker 1, their worker 2.</li>
-              <li><strong>5 numbers:</strong> three phase flags (place, move, build) and two flags for the worker that just moved, since it must be the one that builds.</li>
-            </ul>
-            <p>The convolutional network reshapes them into 15 planes: the 9 board planes, the 5 flags broadcast over the board, and one plane of ones.</p>
+            <p>The example position above, in index order, one block of 25 per plane. A 1 is in bold.</p>
             <div class="vector" id="planes-vector" aria-label="All 230 numbers"></div>
           </div>
         </details>
+
+        <h3>Action space</h3>
+        <p>75 actions in three blocks of 25, one action per square. The numbers 0–24 mean "place" or "build", depending on the phase.</p>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th class="nowrap">Action <math><semantics><mi>a</mi><annotation encoding="application/x-tex">a</annotation></semantics></math></th><th>Phase</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td>0–24</td><td>place</td><td>put my next unplaced worker on square <math><semantics><mi>a</mi><annotation encoding="application/x-tex">a</annotation></semantics></math></td></tr>
+              <tr><td>25–49</td><td>move</td><td>move my worker 1 to square <math><semantics><mrow><mi>a</mi><mo>−</mo><mn>25</mn></mrow><annotation encoding="application/x-tex">a - 25</annotation></semantics></math></td></tr>
+              <tr><td>50–74</td><td>move</td><td>move my worker 2 to square <math><semantics><mrow><mi>a</mi><mo>−</mo><mn>50</mn></mrow><annotation encoding="application/x-tex">a - 50</annotation></semantics></math></td></tr>
+              <tr><td>0–24</td><td>build</td><td>build on square <math><semantics><mi>a</mi><annotation encoding="application/x-tex">a</annotation></semantics></math>: one level, or a dome on level 3</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>A move by worker <math><semantics><mrow><mi>w</mi><mo>∈</mo><mo form="prefix" stretchy="false">{</mo><mn>0</mn><mo separator="true">,</mo><mn>1</mn><mo form="postfix" stretchy="false">}</mo></mrow><annotation encoding="application/x-tex">w \in \{0, 1\}</annotation></semantics></math> to square <math><semantics><mi>c</mi><annotation encoding="application/x-tex">c</annotation></semantics></math> is action <math><semantics><mrow><mi>a</mi><mo>=</mo><mn>25</mn><mo>+</mo><mn>25</mn><mi>w</mi><mo>+</mo><mi>c</mi></mrow><annotation encoding="application/x-tex">a = 25 + 25w + c</annotation></semantics></math>. Moving worker 1 to C4 (square 17) is action 42. These three blocks are exactly the policy network's three output planes, flattened.</p>
+        <div class="key-eq">
+          <span class="eq-label">The legal-action mask</span>
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>a</mi><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><mi>s</mi><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mo>=</mo><mn>0</mn><mspace width="1em"></mspace><mtext>whenever </mtext><msub><mi>m</mi><mi>a</mi></msub><mo>=</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\class{v-policy}{\pi_\theta(a \mid s)} = 0 \quad \text{whenever } m_a = 0</annotation></semantics></math></div>
+          <p class="reading">For every decision the rules engine computes a mask <math><semantics><mrow><mi>m</mi><mo>∈</mo><mo form="prefix" stretchy="false">{</mo><mn>0</mn><mo separator="true">,</mo><mn>1</mn><msup><mo form="postfix" stretchy="false">}</mo><mn>75</mn></msup></mrow><annotation encoding="application/x-tex">m \in \{0, 1\}^{75}</annotation></semantics></math>, with <math><semantics><mrow><msub><mi>m</mi><mi>a</mi></msub><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">m_a = 1</annotation></semantics></math> for the legal actions, and the policy gives every other action probability 0 (see <a href="#move">Choosing a move</a>).</p>
+        </div>
+        <ul>
+          <li><b>Place:</b> any square without a worker.</li>
+          <li><b>Move:</b> to one of the up to 8 neighbouring squares that has no worker or dome and is at most one level higher. The move must also leave a square to build on, unless it wins.</li>
+          <li><b>Build:</b> on a neighbour of the worker that just moved that has no worker or dome.</li>
+        </ul>
+
+        <h3>Rewards</h3>
+        <div class="eq">
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><msub><mi>r</mi><mi>t</mi></msub><mo>=</mo><mrow><mo fence="true" form="prefix">{</mo><mtable><mtr><mtd class="tml-left ms3"><mrow><mo>+</mo><mn>1</mn></mrow></mtd><mtd class="tml-left ms4"><mrow><mtext>the learner wins during step </mtext><mi>t</mi></mrow></mtd></mtr><mtr><mtd class="tml-left ms3"><mrow><mo>−</mo><mn>1</mn></mrow></mtd><mtd class="tml-left ms4"><mrow><mtext>the learner loses during step </mtext><mi>t</mi></mrow></mtd></mtr><mtr><mtd class="tml-left ms3"><mrow><mspace width="0.2778em"></mspace><mspace width="0.2778em"></mspace><mspace width="0.1667em"></mspace><mn>0</mn></mrow></mtd><mtd class="tml-left ms4"><mtext>otherwise</mtext></mtd></mtr></mtable><mo fence="true" form="postfix"></mo></mrow></mrow><annotation encoding="application/x-tex">r_t = \begin{cases} +1 &amp; \text{the learner wins during step } t \\ -1 &amp; \text{the learner loses during step } t \\ \;\;\,0 &amp; \text{otherwise} \end{cases}</annotation></semantics></math></div>
+          <p class="reading">Nothing is given for height, threats or position. The agent has to work out from results alone which moves helped.</p>
+        </div>
+
+        <h3>Starting state</h3>
+        <p>An empty board: all 25 squares at level 0, no workers placed, phase "place", coral to act. The learner's seat alternates between games: coral in one, gold in the next. When the learner is gold, the opponent places coral's two workers before the learner's first observation.</p>
+
+        <h3 id="numbers-end">Episode end</h3>
+        <ul>
+          <li><b>Terminated:</b> a worker steps up from level 2 onto level 3, and its player wins; or the player to move has no move it can complete with a build, and loses.</li>
+          <li><b>Truncated:</b> 400 actions in total, both players' counted, and still no winner. The reward is 0, and the return is completed with the value network's estimate, because the game did not really end.</li>
+        </ul>
+
+        <h3>One step</h3>
+        <p><code>step(a)</code> applies the learner's action, then plays the opponent's actions until it is the learner's turn again or the game is over. One learner turn is therefore two steps, a move and then a build, and the opponent's whole turn happens inside the second.</p>
+        <div class="code-label"><span>server/rl/environment.py</span><span>comments added</span></div>
+        <pre><code>def reset(self):
+    self.learner = self.episodes % 2   <span class="c"># coral and gold alternate</span>
+    self.episodes += 1
+    self.game = Game()
+    self._opponent_turn()              <span class="c"># a gold learner waits for coral's placements</span>
+    return self.game
+
+def step(self, action):
+    self.game.apply(action)            <span class="c"># the learner's placement, move or build</span>
+    self._opponent_turn()              <span class="c"># the opponent acts until the learner is next</span>
+    terminated = self.game.winner is not None
+    truncated = not terminated and self.game.revision &gt;= self.max_actions
+    reward = (1.0 if self.game.winner == self.learner else -1.0) if terminated else 0.0
+    return self.game, reward, terminated, truncated</code></pre>
       </section>
 
       <section id="network">
@@ -430,7 +553,7 @@ def rewards_to_go(rewards, next_values, terminated, boundaries,
           <summary>Show the math and the code</summary>
           <div class="deep-body">
             <div class="eq">
-              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><msub><mo>∇</mo><mi>θ</mi></msub><mi>J</mi><mo form="prefix" stretchy="false">(</mo><mi>θ</mi><mo form="postfix" stretchy="false">)</mo><mo>=</mo><msub><mi>𝔼</mi><mi>t</mi></msub><mspace width="-0.1667em" class="ms4"></mspace><mrow><mo fence="true" form="prefix">[</mo><mspace width="0.1667em"></mspace><msub><mo>∇</mo><mi>θ</mi></msub><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mspace width="0.2778em"></mspace><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><mspace width="0.1667em"></mspace><mo fence="true" form="postfix">]</mo></mrow></mrow><annotation encoding="application/x-tex">\nabla_\theta J(\theta) = \mathbb{E}_t\!\left[\, \nabla_\theta \log \class{v-policy}{\pi_\theta(a_t \mid s_t)}\; \class{v-adv}{\hat{A}_t} \,\right]</annotation></semantics></math></div>
+              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><msub><mo>∇</mo><mi>θ</mi></msub><mi>J</mi><mo form="prefix" stretchy="false">(</mo><mi>θ</mi><mo form="postfix" stretchy="false">)</mo><mo>=</mo><msub><mi>𝔼</mi><mi>t</mi></msub><mspace width="-0.1667em" class="ms5"></mspace><mrow><mo fence="true" form="prefix">[</mo><mspace width="0.1667em"></mspace><msub><mo>∇</mo><mi>θ</mi></msub><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mspace width="0.2778em"></mspace><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><mspace width="0.1667em"></mspace><mo fence="true" form="postfix">]</mo></mrow></mrow><annotation encoding="application/x-tex">\nabla_\theta J(\theta) = \mathbb{E}_t\!\left[\, \nabla_\theta \log \class{v-policy}{\pi_\theta(a_t \mid s_t)}\; \class{v-adv}{\hat{A}_t} \,\right]</annotation></semantics></math></div>
               <p class="reading"><b>Where it starts, the policy gradient:</b> to win more often, raise the log-probability of each action in proportion to its advantage (Williams, 1992; Sutton et al., 2000). Followed naively, each batch supports only one small step, and a step slightly too big can collapse the policy onto a few moves.</p>
             </div>
             <div class="eq">
@@ -540,7 +663,7 @@ def rewards_to_go(rewards, next_values, terminated, boundaries,
 
         <div class="key-eq">
           <span class="eq-label">Spinning Up's shorter form of the clip</span>
-          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><mi>g</mi><mo form="prefix" stretchy="false">(</mo><mi class="v-limit">ϵ</mi><mo separator="true">,</mo><mi class="v-adv">A</mi><mo form="postfix" stretchy="false">)</mo><mo>=</mo><mrow><mo fence="true" form="prefix">{</mo><mtable><mtr><mtd class="tml-left ms3"><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>+</mo><mi class="v-limit">ϵ</mi><mo form="postfix" stretchy="false">)</mo><mspace width="0.1667em"></mspace><mi class="v-adv">A</mi></mrow></mtd><mtd class="tml-left ms5"><mrow><mi class="v-adv">A</mi><mo>≥</mo><mn>0</mn></mrow></mtd></mtr><mtr><mtd class="tml-left ms3"><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi class="v-limit">ϵ</mi><mo form="postfix" stretchy="false">)</mo><mspace width="0.1667em"></mspace><mi class="v-adv">A</mi></mrow></mtd><mtd class="tml-left ms5"><mrow><mi class="v-adv">A</mi><mo>&lt;</mo><mn>0</mn></mrow></mtd></mtr></mtable><mo fence="true" form="postfix"></mo></mrow></mrow><annotation encoding="application/x-tex">g(\class{v-limit}{\epsilon}, \class{v-adv}{A}) = \begin{cases} (1+\class{v-limit}{\epsilon})\,\class{v-adv}{A} &amp; \class{v-adv}{A} \ge 0 \\ (1-\class{v-limit}{\epsilon})\,\class{v-adv}{A} &amp; \class{v-adv}{A} &lt; 0 \end{cases}</annotation></semantics></math></div>
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><mi>g</mi><mo form="prefix" stretchy="false">(</mo><mi class="v-limit">ϵ</mi><mo separator="true">,</mo><mi class="v-adv">A</mi><mo form="postfix" stretchy="false">)</mo><mo>=</mo><mrow><mo fence="true" form="prefix">{</mo><mtable><mtr><mtd class="tml-left ms3"><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>+</mo><mi class="v-limit">ϵ</mi><mo form="postfix" stretchy="false">)</mo><mspace width="0.1667em"></mspace><mi class="v-adv">A</mi></mrow></mtd><mtd class="tml-left ms4"><mrow><mi class="v-adv">A</mi><mo>≥</mo><mn>0</mn></mrow></mtd></mtr><mtr><mtd class="tml-left ms3"><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi class="v-limit">ϵ</mi><mo form="postfix" stretchy="false">)</mo><mspace width="0.1667em"></mspace><mi class="v-adv">A</mi></mrow></mtd><mtd class="tml-left ms4"><mrow><mi class="v-adv">A</mi><mo>&lt;</mo><mn>0</mn></mrow></mtd></mtr></mtable><mo fence="true" form="postfix"></mo></mrow></mrow><annotation encoding="application/x-tex">g(\class{v-limit}{\epsilon}, \class{v-adv}{A}) = \begin{cases} (1+\class{v-limit}{\epsilon})\,\class{v-adv}{A} &amp; \class{v-adv}{A} \ge 0 \\ (1-\class{v-limit}{\epsilon})\,\class{v-adv}{A} &amp; \class{v-adv}{A} &lt; 0 \end{cases}</annotation></semantics></math></div>
           <p class="reading"><math><semantics><mrow><mrow><mi>min</mi><mo>⁡</mo></mrow><mo form="prefix" stretchy="false">(</mo><mi>ρ</mi><mi>A</mi><mo separator="true">,</mo><mtext> </mtext><mi>g</mi><mo form="prefix" stretchy="false">(</mo><mi>ϵ</mi><mo separator="true">,</mo><mi>A</mi><mo form="postfix" stretchy="false">)</mo><mo form="postfix" stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\min(\rho A,\ g(\epsilon, A))</annotation></semantics></math> is the same as <math><semantics><mrow><mrow><mi>min</mi><mo>⁡</mo></mrow><mo form="prefix" stretchy="false">(</mo><mi>ρ</mi><mi>A</mi><mo separator="true">,</mo><mtext> </mtext><mi>clip</mi><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><mi>ρ</mi><mo separator="true">,</mo><mn>1</mn><mo>−</mo><mi>ϵ</mi><mo separator="true">,</mo><mn>1</mn><mo>+</mo><mi>ϵ</mi><mo form="postfix" stretchy="false">)</mo><mi>A</mi><mo form="postfix" stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\min(\rho A,\ \operatorname{clip}(\rho, 1-\epsilon, 1+\epsilon) A)</annotation></semantics></math> from section 7, written without the clip: for a good action the objective is capped at <math><semantics><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>+</mo><mi>ϵ</mi><mo form="postfix" stretchy="false">)</mo><mi>A</mi></mrow><annotation encoding="application/x-tex">(1+\epsilon)A</annotation></semantics></math>, for a bad one at <math><semantics><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>ϵ</mi><mo form="postfix" stretchy="false">)</mo><mi>A</mi></mrow><annotation encoding="application/x-tex">(1-\epsilon)A</annotation></semantics></math>.</p>
         </div>
 

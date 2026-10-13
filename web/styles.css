@@ -46,6 +46,10 @@ p { margin: 0; }
 .link-button { border: 0; background: none; padding: 8px 12px; border-radius: 8px; color: var(--ink-soft); font-weight: 500; text-decoration: none; }
 dialog a { color: var(--dome); font-weight: 600; text-underline-offset: 3px; }
 .link-button:hover { color: var(--ink); background: var(--limewash); }
+.link-button.github { display: inline-flex; align-items: center; gap: 7px; }
+.masthead .link-button { white-space: nowrap; }
+.link-button .short { display: none; }
+.gh-mark { width: 17px; height: 17px; fill: currentColor; stroke: none; }
 
 .board-area { grid-area: board; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .board-frame { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--sky); isolation: isolate; }
@@ -275,6 +279,11 @@ body.focus.drawer-open .sheet { transform: none; visibility: visible; transition
 @media (max-width: 480px) {
   .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .link-button { font-size: 13.5px; }
+  .link-button.github span { display: none; }  /* the mark alone on phones; the link keeps its label */
+}
+@media (max-width: 420px) {
+  .link-button .long { display: none; }
+  .link-button .short { display: inline; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
