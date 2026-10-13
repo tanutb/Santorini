@@ -3,15 +3,17 @@
  *   node scripts/browser-arena.mjs full:4 climber [games=200] [seed=7] [threads=8]
  * A player is `climber` (a port of server/rl/opponents.py) or `<level>:<depth>`: a network from web/models
  * and the opponent turns searched (0 is the network alone, 1 blocks only climbs one move away).
+ * SANTORINI_MODELS=<folder> reads the networks from another folder with its own manifest.json, to test a candidate.
  */
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { Game } from '../web/engine.js';
 import { Policy, pick } from '../web/policy.js';
 import { tacticalMask } from '../web/tactics.js';
 import { orient, unorient } from '../web/symmetry.js';
 
-const MODELS = new URL('../web/models/', import.meta.url);
+const MODELS = process.env.SANTORINI_MODELS ? pathToFileURL(process.env.SANTORINI_MODELS.replace(/[\\/]*$/, '/')) : new URL('../web/models/', import.meta.url);
 const CENTER = Array.from({ length: 25 }, (_, cell) => Math.abs(Math.floor(cell / 5) - 2) + Math.abs(cell % 5 - 2));
 
 function random(seed) {
