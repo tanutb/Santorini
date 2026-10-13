@@ -1,0 +1,825 @@
+{
+ "format": 1,
+ "default": "full",
+ "levels": [
+  {
+   "id": "early",
+   "name": "Early",
+   "file": "early.bin",
+   "spec": {
+    "architecture": "mlp",
+    "hidden": 128
+   },
+   "parameters": 55884,
+   "tensors": [
+    {
+     "name": "trunk.0.weight",
+     "shape": [
+      128,
+      230
+     ],
+     "offset": 0
+    },
+    {
+     "name": "trunk.0.bias",
+     "shape": [
+      128
+     ],
+     "offset": 29440
+    },
+    {
+     "name": "trunk.2.weight",
+     "shape": [
+      128,
+      128
+     ],
+     "offset": 29568
+    },
+    {
+     "name": "trunk.2.bias",
+     "shape": [
+      128
+     ],
+     "offset": 45952
+    },
+    {
+     "name": "actor.weight",
+     "shape": [
+      75,
+      128
+     ],
+     "offset": 46080
+    },
+    {
+     "name": "actor.bias",
+     "shape": [
+      75
+     ],
+     "offset": 55680
+    },
+    {
+     "name": "critic.weight",
+     "shape": [
+      1,
+      128
+     ],
+     "offset": 55755
+    },
+    {
+     "name": "critic.bias",
+     "shape": [
+      1
+     ],
+     "offset": 55883
+    }
+   ],
+   "metadata": {
+    "steps": 450560,
+    "episodes": 23631,
+    "updates": 500,
+    "algorithm": "PPO-Clip (custom PyTorch)"
+   },
+   "evaluation": {
+    "random": {
+     "games": 400,
+     "wins": 386,
+     "losses": 14,
+     "draws": 0,
+     "win_rate": 0.965,
+     "confidence_95": [
+      0.9421,
+      0.979
+     ]
+    },
+    "tactical": {
+     "games": 400,
+     "wins": 294,
+     "losses": 106,
+     "draws": 0,
+     "win_rate": 0.735,
+     "confidence_95": [
+      0.6897,
+      0.7759
+     ]
+    },
+    "lookahead": {
+     "games": 400,
+     "wins": 197,
+     "losses": 203,
+     "draws": 0,
+     "win_rate": 0.4925,
+     "confidence_95": [
+      0.4438,
+      0.5413
+     ]
+    }
+   },
+   "versus": {}
+  },
+  {
+   "id": "developing",
+   "name": "Developing",
+   "file": "developing.bin",
+   "spec": {
+    "architecture": "conv",
+    "channels": 64,
+    "blocks": 4
+   },
+   "parameters": 317640,
+   "tensors": [
+    {
+     "name": "stem.0.weight",
+     "shape": [
+      64,
+      15,
+      3,
+      3
+     ],
+     "offset": 0
+    },
+    {
+     "name": "stem.0.bias",
+     "shape": [
+      64
+     ],
+     "offset": 8640
+    },
+    {
+     "name": "tower.0.first.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 8704
+    },
+    {
+     "name": "tower.0.first.bias",
+     "shape": [
+      64
+     ],
+     "offset": 45568
+    },
+    {
+     "name": "tower.0.second.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 45632
+    },
+    {
+     "name": "tower.0.second.bias",
+     "shape": [
+      64
+     ],
+     "offset": 82496
+    },
+    {
+     "name": "tower.1.first.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 82560
+    },
+    {
+     "name": "tower.1.first.bias",
+     "shape": [
+      64
+     ],
+     "offset": 119424
+    },
+    {
+     "name": "tower.1.second.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 119488
+    },
+    {
+     "name": "tower.1.second.bias",
+     "shape": [
+      64
+     ],
+     "offset": 156352
+    },
+    {
+     "name": "tower.2.first.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 156416
+    },
+    {
+     "name": "tower.2.first.bias",
+     "shape": [
+      64
+     ],
+     "offset": 193280
+    },
+    {
+     "name": "tower.2.second.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 193344
+    },
+    {
+     "name": "tower.2.second.bias",
+     "shape": [
+      64
+     ],
+     "offset": 230208
+    },
+    {
+     "name": "tower.3.first.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 230272
+    },
+    {
+     "name": "tower.3.first.bias",
+     "shape": [
+      64
+     ],
+     "offset": 267136
+    },
+    {
+     "name": "tower.3.second.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 267200
+    },
+    {
+     "name": "tower.3.second.bias",
+     "shape": [
+      64
+     ],
+     "offset": 304064
+    },
+    {
+     "name": "policy.weight",
+     "shape": [
+      3,
+      64,
+      1,
+      1
+     ],
+     "offset": 304128
+    },
+    {
+     "name": "policy.bias",
+     "shape": [
+      3
+     ],
+     "offset": 304320
+    },
+    {
+     "name": "value.0.weight",
+     "shape": [
+      4,
+      64,
+      1,
+      1
+     ],
+     "offset": 304323
+    },
+    {
+     "name": "value.0.bias",
+     "shape": [
+      4
+     ],
+     "offset": 304579
+    },
+    {
+     "name": "value.3.weight",
+     "shape": [
+      128,
+      100
+     ],
+     "offset": 304583
+    },
+    {
+     "name": "value.3.bias",
+     "shape": [
+      128
+     ],
+     "offset": 317383
+    },
+    {
+     "name": "value.5.weight",
+     "shape": [
+      1,
+      128
+     ],
+     "offset": 317511
+    },
+    {
+     "name": "value.5.bias",
+     "shape": [
+      1
+     ],
+     "offset": 317639
+    }
+   ],
+   "metadata": {
+    "steps": 1638400,
+    "episodes": 94728,
+    "updates": 100,
+    "algorithm": "PPO-Clip (custom PyTorch)"
+   },
+   "evaluation": {
+    "random": {
+     "games": 400,
+     "wins": 399,
+     "losses": 1,
+     "draws": 0,
+     "win_rate": 0.9975,
+     "confidence_95": [
+      0.986,
+      0.9996
+     ]
+    },
+    "tactical": {
+     "games": 400,
+     "wins": 387,
+     "losses": 13,
+     "draws": 0,
+     "win_rate": 0.9675,
+     "confidence_95": [
+      0.9452,
+      0.9809
+     ]
+    },
+    "lookahead": {
+     "games": 400,
+     "wins": 399,
+     "losses": 1,
+     "draws": 0,
+     "win_rate": 0.9975,
+     "confidence_95": [
+      0.986,
+      0.9996
+     ]
+    }
+   },
+   "versus": {
+    "early": 1.0
+   }
+  },
+  {
+   "id": "full",
+   "name": "Full strength",
+   "file": "full.bin",
+   "spec": {
+    "architecture": "separate",
+    "channels": 64,
+    "blocks": 4,
+    "value_channels": 32,
+    "value_blocks": 4
+   },
+   "parameters": 395848,
+   "tensors": [
+    {
+     "name": "pi.stem.0.weight",
+     "shape": [
+      64,
+      15,
+      3,
+      3
+     ],
+     "offset": 0
+    },
+    {
+     "name": "pi.stem.0.bias",
+     "shape": [
+      64
+     ],
+     "offset": 8640
+    },
+    {
+     "name": "pi.tower.0.first.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 8704
+    },
+    {
+     "name": "pi.tower.0.first.bias",
+     "shape": [
+      64
+     ],
+     "offset": 45568
+    },
+    {
+     "name": "pi.tower.0.second.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 45632
+    },
+    {
+     "name": "pi.tower.0.second.bias",
+     "shape": [
+      64
+     ],
+     "offset": 82496
+    },
+    {
+     "name": "pi.tower.1.first.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 82560
+    },
+    {
+     "name": "pi.tower.1.first.bias",
+     "shape": [
+      64
+     ],
+     "offset": 119424
+    },
+    {
+     "name": "pi.tower.1.second.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 119488
+    },
+    {
+     "name": "pi.tower.1.second.bias",
+     "shape": [
+      64
+     ],
+     "offset": 156352
+    },
+    {
+     "name": "pi.tower.2.first.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 156416
+    },
+    {
+     "name": "pi.tower.2.first.bias",
+     "shape": [
+      64
+     ],
+     "offset": 193280
+    },
+    {
+     "name": "pi.tower.2.second.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 193344
+    },
+    {
+     "name": "pi.tower.2.second.bias",
+     "shape": [
+      64
+     ],
+     "offset": 230208
+    },
+    {
+     "name": "pi.tower.3.first.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 230272
+    },
+    {
+     "name": "pi.tower.3.first.bias",
+     "shape": [
+      64
+     ],
+     "offset": 267136
+    },
+    {
+     "name": "pi.tower.3.second.weight",
+     "shape": [
+      64,
+      64,
+      3,
+      3
+     ],
+     "offset": 267200
+    },
+    {
+     "name": "pi.tower.3.second.bias",
+     "shape": [
+      64
+     ],
+     "offset": 304064
+    },
+    {
+     "name": "pi.policy.weight",
+     "shape": [
+      3,
+      64,
+      1,
+      1
+     ],
+     "offset": 304128
+    },
+    {
+     "name": "pi.policy.bias",
+     "shape": [
+      3
+     ],
+     "offset": 304320
+    },
+    {
+     "name": "v.stem.0.weight",
+     "shape": [
+      32,
+      15,
+      3,
+      3
+     ],
+     "offset": 304323
+    },
+    {
+     "name": "v.stem.0.bias",
+     "shape": [
+      32
+     ],
+     "offset": 308643
+    },
+    {
+     "name": "v.tower.0.first.weight",
+     "shape": [
+      32,
+      32,
+      3,
+      3
+     ],
+     "offset": 308675
+    },
+    {
+     "name": "v.tower.0.first.bias",
+     "shape": [
+      32
+     ],
+     "offset": 317891
+    },
+    {
+     "name": "v.tower.0.second.weight",
+     "shape": [
+      32,
+      32,
+      3,
+      3
+     ],
+     "offset": 317923
+    },
+    {
+     "name": "v.tower.0.second.bias",
+     "shape": [
+      32
+     ],
+     "offset": 327139
+    },
+    {
+     "name": "v.tower.1.first.weight",
+     "shape": [
+      32,
+      32,
+      3,
+      3
+     ],
+     "offset": 327171
+    },
+    {
+     "name": "v.tower.1.first.bias",
+     "shape": [
+      32
+     ],
+     "offset": 336387
+    },
+    {
+     "name": "v.tower.1.second.weight",
+     "shape": [
+      32,
+      32,
+      3,
+      3
+     ],
+     "offset": 336419
+    },
+    {
+     "name": "v.tower.1.second.bias",
+     "shape": [
+      32
+     ],
+     "offset": 345635
+    },
+    {
+     "name": "v.tower.2.first.weight",
+     "shape": [
+      32,
+      32,
+      3,
+      3
+     ],
+     "offset": 345667
+    },
+    {
+     "name": "v.tower.2.first.bias",
+     "shape": [
+      32
+     ],
+     "offset": 354883
+    },
+    {
+     "name": "v.tower.2.second.weight",
+     "shape": [
+      32,
+      32,
+      3,
+      3
+     ],
+     "offset": 354915
+    },
+    {
+     "name": "v.tower.2.second.bias",
+     "shape": [
+      32
+     ],
+     "offset": 364131
+    },
+    {
+     "name": "v.tower.3.first.weight",
+     "shape": [
+      32,
+      32,
+      3,
+      3
+     ],
+     "offset": 364163
+    },
+    {
+     "name": "v.tower.3.first.bias",
+     "shape": [
+      32
+     ],
+     "offset": 373379
+    },
+    {
+     "name": "v.tower.3.second.weight",
+     "shape": [
+      32,
+      32,
+      3,
+      3
+     ],
+     "offset": 373411
+    },
+    {
+     "name": "v.tower.3.second.bias",
+     "shape": [
+      32
+     ],
+     "offset": 382627
+    },
+    {
+     "name": "v.value.0.weight",
+     "shape": [
+      4,
+      32,
+      1,
+      1
+     ],
+     "offset": 382659
+    },
+    {
+     "name": "v.value.0.bias",
+     "shape": [
+      4
+     ],
+     "offset": 382787
+    },
+    {
+     "name": "v.value.3.weight",
+     "shape": [
+      128,
+      100
+     ],
+     "offset": 382791
+    },
+    {
+     "name": "v.value.3.bias",
+     "shape": [
+      128
+     ],
+     "offset": 395591
+    },
+    {
+     "name": "v.value.5.weight",
+     "shape": [
+      1,
+      128
+     ],
+     "offset": 395719
+    },
+    {
+     "name": "v.value.5.bias",
+     "shape": [
+      1
+     ],
+     "offset": 395847
+    }
+   ],
+   "metadata": {
+    "steps": 36323328,
+    "episodes": 2000219,
+    "updates": 2217,
+    "algorithm": "PPO-Clip, Spinning Up process (custom PyTorch)"
+   },
+   "evaluation": {
+    "random": {
+     "games": 400,
+     "wins": 400,
+     "losses": 0,
+     "draws": 0,
+     "win_rate": 1.0,
+     "confidence_95": [
+      0.9905,
+      1.0
+     ]
+    },
+    "tactical": {
+     "games": 400,
+     "wins": 395,
+     "losses": 5,
+     "draws": 0,
+     "win_rate": 0.9875,
+     "confidence_95": [
+      0.9711,
+      0.9946
+     ]
+    },
+    "lookahead": {
+     "games": 400,
+     "wins": 400,
+     "losses": 0,
+     "draws": 0,
+     "win_rate": 1.0,
+     "confidence_95": [
+      0.9905,
+      1.0
+     ]
+    }
+   },
+   "versus": {
+    "developing": 0.89,
+    "early": 1.0,
+    "previous": 0.785
+   }
+  }
+ ]
+}

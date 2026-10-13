@@ -1,0 +1,23 @@
+# Render Blueprint for the online game server: render.com > New > Blueprint > this repository.
+# Games against the agent and pass and play run in the browser and need no server; this hosts
+# online rooms and also serves the whole website at its own address.
+services:
+  - type: web
+    name: santorini
+    runtime: python
+    plan: free
+    # region: oregon (default), ohio, virginia, frankfurt or singapore; it cannot change after creation.
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m server
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      # Render's proxy sets X-Forwarded-For, so rate limits see real client IPs.
+      - key: SANTORINI_TRUST_PROXY
+        value: "1"
+      # Sites hosted elsewhere that may use this server, e.g. https://<user>.github.io (asked at creation).
+      - key: SANTORINI_ALLOWED_ORIGINS
+        sync: false
+      # Optional X-API-Key values, comma-separated; leave empty to accept requests without a key.
+      - key: SANTORINI_API_KEYS
+        sync: false

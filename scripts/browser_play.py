@@ -9,6 +9,17 @@ import sys
 import time
 from playwright.sync_api import sync_playwright
 
+def wait_until(page, expression, timeout=10000):
+    """Poll from Python: page.evaluate runs through DevTools, which the page's CSP does not block (eval does)."""
+    import time as _time
+    end = _time.time() + timeout / 1000
+    while _time.time() < end:
+        if page.evaluate(expression):
+            return
+        page.wait_for_timeout(60)
+    raise AssertionError("Timed out waiting for: " + expression)
+
+
 url, prefix = sys.argv[1], sys.argv[2]
 device = sys.argv[3] if len(sys.argv) > 3 else "desktop"
 rng = random.Random(int(sys.argv[4]) if len(sys.argv) > 4 else 3)
@@ -23,12 +34,12 @@ with sync_playwright() as p:
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(url, wait_until="networkidle")
-    page.wait_for_function("window.santorini && window.santorini.board.kind === '3d'", timeout=15000)
+    wait_until(page, "window.santorini && window.santorini.board.kind === '3d'", timeout=15000)
     if len(sys.argv) > 5:
         page.wait_for_selector(f"[data-level={sys.argv[5]}]")
         page.click(f"[data-level={sys.argv[5]}]")
     page.click("#start-button")
-    page.wait_for_function("window.santorini.room && window.santorini.room.game")
+    wait_until(page, "window.santorini.room && window.santorini.room.game")
     print("level", page.evaluate("window.santorini.room.level"))
 
     def room():
@@ -99,7 +110,7 @@ with sync_playwright() as p:
         elif game["phase"] == "move":
             if game["revision"] > 6 and "hint" not in shots:
                 page.click("#hint-button")
-                page.wait_for_function("!document.getElementById('hint-result').hidden", timeout=8000)
+                wait_until(page, "!document.getElementById('hint-result').hidden", timeout=8000)
                 shot("hint")
                 page.keyboard.press("Escape")
             wins = [a for a in legal if game["heights"][game["workers"][0][(a - 25) // 25]] == 2 and game["heights"][(a - 25) % 25] == 3]

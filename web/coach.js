@@ -1,8 +1,7 @@
-/** Rule-derived facts for feedback. Mirrors server/game.py; the server stays authoritative. */
-export const NEIGHBORS = Array.from({ length: 25 }, (_, i) => Array.from({ length: 25 }, (_, j) => j)
-  .filter(j => j !== i && Math.abs(Math.floor(i / 5) - Math.floor(j / 5)) <= 1 && Math.abs(i % 5 - j % 5) <= 1));
+/** Rule-derived facts for feedback and hints. */
+import { NEIGHBORS, coordinate } from './engine.js';
 
-export const coordinate = cell => String.fromCharCode(65 + cell % 5) + (Math.floor(cell / 5) + 1);
+export { NEIGHBORS, coordinate };
 const occupiedCells = game => new Set(game.workers.flat().filter(cell => cell >= 0));
 
 /** Cells a player could step onto from level two to win, ignoring whose turn it is. */
@@ -71,4 +70,26 @@ export function describeTransition(before, after, players) {
   }
   if (change.type === 'dome') return { kind: 'dome', title: name(change.player) + ' capped a tower', detail: coordinate(change.cell) + ' is closed for good.' };
   return { kind: 'build', title: name(change.player) + ' built level ' + change.level, detail: 'On ' + coordinate(change.cell) + '.' };
+}
+
+/** Plain description of a suggested action (port of server/coach.py); never invented reasoning. */
+export function explainAction(game, action) {
+  const occupied = new Set(game.workers.flat().filter(cell => cell >= 0));
+  if (game.phase === 'place') {
+    const free = NEIGHBORS[action].filter(cell => !occupied.has(cell)).length;
+    return { cell: action, worker: null, title: 'Place on ' + coordinate(action),
+      detail: `This square has ${free} free neighbouring squares. Your workers need room to move and build.` };
+  }
+  if (game.phase === 'build') {
+    const dome = game.heights[action] === 3;
+    return { cell: action, worker: game.selected, title: (dome ? 'Cap the tower on ' : 'Build a level on ') + coordinate(action),
+      detail: dome ? 'A dome closes this square for good.' : `This makes level ${game.heights[action] + 1}. Either player can climb it.` };
+  }
+  const worker = Math.floor((action - 25) / 25), target = (action - 25) % 25;
+  const origin = game.workers[game.current][worker], height = game.heights[target];
+  const detail = game.heights[origin] === 2 && height === 3 ? 'Stepping up to level three wins at once.'
+    : height === 2 ? 'This puts your worker on level two, one step from a winning climb.'
+      : height > game.heights[origin] ? 'This climbs one level. You then build with this worker.'
+        : 'After moving, build on a free square next to this worker.';
+  return { cell: target, worker, title: `Move ${coordinate(origin)} to ${coordinate(target)}`, detail };
 }

@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="How the Santorini agent learned to play with PPO-Clip: the training loop, the network, advantages, the clipped objective and the training run, with live figures, equations and code.">
+  <title>How the agent learns · Santorini</title>
+  <link rel="icon" type="image/svg+xml" href="static/icon.svg">
+  <link rel="preload" href="static/fonts/commissioner-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="static/fonts/marcellus-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="static/learn.css">
+</head>
+<body>
+  <svg width="0" height="0" class="sprite" aria-hidden="true">
+    <symbol id="s-play" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="16" r="3"/><path d="M4 20h7M13 4h7"/></symbol>
+    <symbol id="s-record" viewBox="0 0 24 24"><rect x="3" y="6" width="5" height="12" rx="1"/><rect x="10" y="6" width="5" height="12" rx="1"/><path d="M17 6h4M17 12h4M17 18h4"/></symbol>
+    <symbol id="s-score" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+    <symbol id="s-improve" viewBox="0 0 24 24"><path d="M4 17l5-5 4 4 7-8"/><path d="M15 8h5v5"/></symbol>
+    <symbol id="s-fit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4"/><path d="M12 12l7-7M16 5h3v3"/></symbol>
+    <symbol id="s-repeat" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3L20 9"/><path d="M20 4v5h-5"/><path d="M20 12a8 8 0 0 1-14 5.3L4 15"/><path d="M4 20v-5h5"/></symbol>
+  </svg>
+
+  <header class="masthead">
+    <a class="brand" href="./" aria-label="Santorini, play the game">
+      <svg class="icon" viewBox="0 0 40 40" aria-hidden="true"><path class="dome" d="M9 19a8 8 0 0 1 16 0z"/><path d="M8 34V20h18v14M26 34V25h8v9M4 34h33M17 10V6M14.5 34v-7h5v7"/></svg>
+      <span>Santorini</span>
+    </a>
+    <nav aria-label="Site">
+      <a href="./">Play</a>
+      <a href="learn.html" aria-current="page">How it learns</a>
+    </nav>
+  </header>
+
+  <div class="page">
+    <nav class="toc" aria-label="Contents">
+      <details id="toc-details" open>
+        <summary>Contents</summary>
+        <ol>
+          <li><a href="#loop">The training loop</a></li>
+          <li><a href="#numbers">The game as numbers</a></li>
+          <li><a href="#network">Inside the network</a></li>
+          <li><a href="#move">Choosing a move</a></li>
+          <li><a href="#play">Playing to learn</a></li>
+          <li><a href="#advantage">Better than expected?</a></li>
+          <li><a href="#clip">The PPO-Clip objective</a></li>
+          <li><a href="#update">One update</a></li>
+          <li><a href="#algorithm">The algorithm on one page</a></li>
+          <li><a href="#results">What happened in training</a></li>
+          <li><a href="#details">Details that made it work</a></li>
+          <li class="unnumbered"><a href="#glossary">Glossary and reading</a></li>
+        </ol>
+      </details>
+      <div class="palette" aria-label="Colour key">
+        <p>Colour key</p>
+        <span class="chip policy">policy <math><semantics><mi>π</mi><annotation encoding="application/x-tex">\pi</annotation></semantics></math></span>
+        <span class="chip value">value <math><semantics><mi>V</mi><annotation encoding="application/x-tex">V</annotation></semantics></math></span>
+        <span class="chip advantage">advantage <math><semantics><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><annotation encoding="application/x-tex">\hat{A}</annotation></semantics></math></span>
+        <span class="chip limit">clip <math><semantics><mi>ϵ</mi><annotation encoding="application/x-tex">\epsilon</annotation></semantics></math></span>
+      </div>
+    </nav>
+
+    <main class="article">
+      <header class="intro">
+        <h1>How the agent learns</h1>
+        <p class="lede">The Santorini agent taught itself by playing millions of games. Nobody gave it strategies; it only ever learned whether a game ended in a win or a loss. It was trained with PPO-Clip, following OpenAI Spinning Up's algorithm step for step. Here is how, with the real networks, code and training log.</p>
+        <dl class="facts" id="facts">
+          <div><dt id="fact-games">–</dt><dd>games played</dd></div>
+          <div><dt id="fact-decisions">–</dt><dd>decisions learned from</dd></div>
+          <div><dt id="fact-weights">–</dt><dd>weights in the policy network</dd></div>
+          <div><dt id="fact-updates">–</dt><dd>PPO updates</dd></div>
+        </dl>
+      </header>
+
+      <section id="loop">
+        <h2>The training loop</h2>
+        <p class="takeaway">Training repeats one loop: play games, record every decision, score each one, improve the policy, then fit the value network.</p>
+        <p>These are the steps of Spinning Up's PPO-Clip pseudocode (section 9). Step through them with a real game: Coral is the <em>learner</em>, playing with the Hard network; Gold is an earlier agent.</p>
+
+        <figure class="widget pipeline" id="pipeline">
+          <ol class="stages" role="tablist" aria-label="Training loop">
+            <li><button type="button" role="tab" data-stage="0" aria-selected="true"><svg class="stage-icon" aria-hidden="true"><use href="#s-play"/></svg><b>Play</b><small>a game</small></button></li>
+            <li><button type="button" role="tab" data-stage="1" aria-selected="false"><svg class="stage-icon" aria-hidden="true"><use href="#s-record"/></svg><b>Record</b><small>each decision</small></button></li>
+            <li><button type="button" role="tab" data-stage="2" aria-selected="false"><svg class="stage-icon" aria-hidden="true"><use href="#s-score"/></svg><b>Score</b><small>advantages</small></button></li>
+            <li><button type="button" role="tab" data-stage="3" aria-selected="false"><svg class="stage-icon" aria-hidden="true"><use href="#s-improve"/></svg><b>Improve</b><small>the policy</small></button></li>
+            <li><button type="button" role="tab" data-stage="4" aria-selected="false"><svg class="stage-icon" aria-hidden="true"><use href="#s-fit"/></svg><b>Fit</b><small>the value network</small></button></li>
+            <li><button type="button" role="tab" data-stage="5" aria-selected="false"><svg class="stage-icon" aria-hidden="true"><use href="#s-repeat"/></svg><b>Repeat</b><small>every update</small></button></li>
+          </ol>
+          <div class="stage-body" role="tabpanel" aria-live="polite">
+            <div class="stage-visual" id="stage-visual"></div>
+            <div class="stage-text" id="stage-text"></div>
+          </div>
+          <div class="controls pipeline-controls">
+            <button class="button" id="pipe-prev" type="button">Back</button>
+            <button class="button primary" id="pipe-next" type="button">Next step</button>
+            <button class="button" id="pipe-auto" type="button" aria-pressed="false">Play the whole loop</button>
+            <button class="button quiet" id="pipe-new" type="button">Play another game</button>
+          </div>
+        </figure>
+      </section>
+
+      <section id="numbers">
+        <h2>The game as numbers</h2>
+        <p class="takeaway">Each position becomes 230 zeros and ones, always seen from the side about to move.</p>
+        <p>"My" workers and "their" workers, never coral and gold, so one network can play either side.</p>
+        <figure class="widget" id="planes-widget">
+          <div class="widget-head"><h3>An example position, as the network sees it</h3><span>Hover a plane</span></div>
+          <div class="budget" aria-label="230 numbers: 125 for heights, 100 for workers, 5 for flags">
+            <span class="part heights"><b>125</b> heights</span><span class="part workers"><b>100</b> workers</span><span class="part flags"><b>5</b></span>
+          </div>
+          <div class="split">
+            <svg class="board-svg" id="planes-board" viewBox="0 0 300 300" role="img" aria-label="The example position"></svg>
+            <div>
+              <p class="readout" id="planes-who"></p>
+              <div class="planes" id="planes-grid"></div>
+            </div>
+          </div>
+          <figcaption>Each plane is a 5×5 grid of zeros and ones. Gold is to move here, so gold's workers are "mine" and coral's are "theirs". "Moved" marks the worker that must build. The five flags are copied across whole planes, and the edge plane is all ones so the network can tell the board's edge from an empty square.</figcaption>
+        </figure>
+        <details class="deep">
+          <summary>Show the encoding in detail</summary>
+          <div class="deep-body">
+            <ul>
+              <li><strong>125 numbers:</strong> five one-hot height planes. A square at level 2 has a 1 on the level-2 plane and 0 on the other four; the fifth plane marks domes.</li>
+              <li><strong>100 numbers:</strong> four worker planes, each with a single 1: my worker 1, my worker 2, their worker 1, their worker 2.</li>
+              <li><strong>5 numbers:</strong> three phase flags (place, move, build) and two flags for the worker that just moved, since it must be the one that builds.</li>
+            </ul>
+            <p>The convolutional network reshapes them into 15 planes: the 9 board planes, the 5 flags broadcast over the board, and one plane of ones.</p>
+            <div class="vector" id="planes-vector" aria-label="All 230 numbers"></div>
+          </div>
+        </details>
+      </section>
+
+      <section id="network">
+        <h2>Inside the network</h2>
+        <p class="takeaway">Two networks, as in Spinning Up: a policy network <math><semantics><msub><mi>π</mi><mi>θ</mi></msub><annotation encoding="application/x-tex">\pi_\theta</annotation></semantics></math> that scores every move, and a value network <math><semantics><msub><mi>V</mi><mi>ϕ</mi></msub><annotation encoding="application/x-tex">V_\phi</annotation></semantics></math> that judges the position. Both read the board with stacked 3×3 convolutions.</p>
+        <p>Santorini's rules are about neighbours: you move to one, build on one, and win by stepping up from one. A 3×3 convolution looks at a square and its eight neighbours with the same small filter everywhere on the board, which is exactly that shape. Spinning Up's default networks are small dense layers; convolutions suit a board better, but the training process is the same.</p>
+
+        <figure class="widget" id="explorer">
+          <div class="widget-head"><h3>The real policy network, layer by layer</h3><span>Try it</span></div>
+          <div class="flow" id="flow"></div>
+          <div class="heads-flow" id="heads-flow"></div>
+          <p class="readout" id="explorer-readout" aria-live="polite">The network loads when you reach this figure (1.2 MB).</p>
+          <div class="controls">
+            <button class="button primary" id="explorer-run" type="button" disabled>Run the network</button>
+            <span class="note-inline">Shares its position with the next figure: sample a move there and this updates.</span>
+          </div>
+          <figcaption>These are the networks' actual activations. Each small square is one channel's output on the 5×5 board, darker where it responds more strongly. Only the 6 most active of the 64 channels are shown for each layer of the policy network; hover one to see where it peaks. The value network has its own, narrower trunk of 32 channels.</figcaption>
+        </figure>
+
+        <div class="key-eq">
+          <span class="eq-label">A residual block</span>
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><mrow><mi>F</mi><mo form="prefix" stretchy="false">(</mo><mi>𝐡</mi><mo form="postfix" stretchy="false">)</mo></mrow></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><msub><mi>Conv</mi><mn>2</mn></msub><mo>⁡</mo><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">(</mo><mi>ReLU</mi><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><msub><mi>Conv</mi><mn>1</mn></msub><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><mi>𝐡</mi><mo form="postfix" stretchy="false">)</mo><mo form="postfix" stretchy="false">)</mo><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">)</mo></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><msup><mi>𝐡</mi><mrow><mo form="prefix" stretchy="false" lspace="0em" rspace="0em">(</mo><mi>ℓ</mi><mo>+</mo><mn>1</mn><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></msup></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mi>ReLU</mi><mo>⁡</mo><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">(</mo><msup><mi>𝐡</mi><mrow><mo form="prefix" stretchy="false" lspace="0em" rspace="0em">(</mo><mi>ℓ</mi><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></msup><mo>+</mo><mi>F</mi><mo form="prefix" stretchy="false">(</mo><msup><mi>𝐡</mi><mrow><mo form="prefix" stretchy="false" lspace="0em" rspace="0em">(</mo><mi>ℓ</mi><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></msup><mo form="postfix" stretchy="false">)</mo><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">)</mo></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} F(\mathbf{h}) &amp;= \operatorname{Conv}_{2}\big(\operatorname{ReLU}(\operatorname{Conv}_{1}(\mathbf{h}))\big) \\ \mathbf{h}^{(\ell+1)} &amp;= \operatorname{ReLU}\big(\mathbf{h}^{(\ell)} + F(\mathbf{h}^{(\ell)})\big) \end{aligned}</annotation></semantics></math></div>
+          <p class="reading">Each block computes a correction <math><semantics><mi>F</mi><annotation encoding="application/x-tex">F</annotation></semantics></math> and adds it to what it received instead of replacing it. Its second convolution starts at zero, so at the start of training every block passes its input straight through (He et al., 2016).</p>
+        </div>
+
+        <figure class="widget compact" id="receptive-widget">
+          <div class="widget-head"><h3>How far a square can see</h3><span>Try it</span></div>
+          <div class="split">
+            <svg class="board-svg small" id="receptive-board" viewBox="0 0 300 300" role="img" aria-label="Squares that can influence the chosen square"></svg>
+            <div>
+              <label class="control"><span>Layers applied <output id="receptive-out"></output></span><input id="receptive" type="range" min="0" max="5" step="1" value="1"></label>
+              <p class="readout" id="receptive-readout" aria-live="polite"></p>
+              <p class="hint-text">Click a square to choose it.</p>
+            </div>
+          </div>
+        </figure>
+
+        <details class="deep">
+          <summary>Show the math and the code</summary>
+          <div class="deep-body">
+            <div class="eq">
+              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><mrow><msub><mi>z</mi><mi>c</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>i</mi><mo separator="true">,</mo><mi>j</mi><mo form="postfix" stretchy="false">)</mo></mrow></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><msub><mi>b</mi><mi>c</mi></msub><mo>+</mo><mrow><munder><mo movablelimits="false">∑</mo><msup><mi>c</mi><mo lspace="0em" rspace="0em" class="tml-prime">′</mo></msup></munder></mrow><mrow><munder><mo movablelimits="false">∑</mo><mrow><mrow><mi mathvariant="normal">Δ</mi></mrow><mi>i</mi><mo separator="true">,</mo><mspace width="0.1667em"></mspace><mrow><mi mathvariant="normal">Δ</mi></mrow><mi>j</mi></mrow></munder></mrow><msub><mi>W</mi><mrow><mi>c</mi><mo separator="true">,</mo><msup><mi>c</mi><mo lspace="0em" rspace="0em" class="tml-prime">′</mo></msup></mrow></msub><mo form="prefix" stretchy="false">(</mo><mrow><mi mathvariant="normal">Δ</mi></mrow><mi>i</mi><mo separator="true">,</mo><mrow><mi mathvariant="normal">Δ</mi></mrow><mi>j</mi><mo form="postfix" stretchy="false">)</mo></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><mrow></mrow></mtd><mtd class="tml-left ms3"><mrow><mspace width="2em"></mspace><mspace width="2em"></mspace><mo>×</mo><mspace width="0.1667em"></mspace><msub><mi>x</mi><msup><mi>c</mi><mo lspace="0em" rspace="0em" class="tml-prime">′</mo></msup></msub><mo form="prefix" stretchy="false">(</mo><mi>i</mi><mo>+</mo><mrow><mi mathvariant="normal">Δ</mi></mrow><mi>i</mi><mo separator="true">,</mo><mspace width="0.1667em"></mspace><mi>j</mi><mo>+</mo><mrow><mi mathvariant="normal">Δ</mi></mrow><mi>j</mi><mo form="postfix" stretchy="false">)</mo></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><mrow><msub><mi>h</mi><mi>c</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>i</mi><mo separator="true">,</mo><mi>j</mi><mo form="postfix" stretchy="false">)</mo></mrow></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mi>ReLU</mi><mo>⁡</mo><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">(</mo><msub><mi>z</mi><mi>c</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>i</mi><mo separator="true">,</mo><mi>j</mi><mo form="postfix" stretchy="false">)</mo><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">)</mo></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} z_{c}(i,j) &amp;= b_c + \sum_{c&#x27;} \sum_{\Delta i,\, \Delta j} W_{c,c&#x27;}(\Delta i, \Delta j) \\ &amp;\qquad\qquad \times\, x_{c&#x27;}(i+\Delta i,\, j+\Delta j) \\ h_{c}(i,j) &amp;= \operatorname{ReLU}\big(z_{c}(i,j)\big) \end{aligned}</annotation></semantics></math></div>
+              <p class="reading"><b>A 3×3 convolution:</b> channel <math><semantics><mi>c</mi><annotation encoding="application/x-tex">c</annotation></semantics></math> at square <math><semantics><mrow><mo form="prefix" stretchy="false">(</mo><mi>i</mi><mo separator="true">,</mo><mi>j</mi><mo form="postfix" stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(i,j)</annotation></semantics></math> is a weighted sum of every input channel over that square's 3×3 neighbourhood, with <math><semantics><mrow><mrow><mi mathvariant="normal">Δ</mi></mrow><mi>i</mi></mrow><annotation encoding="application/x-tex">\Delta i</annotation></semantics></math> and <math><semantics><mrow><mrow><mi mathvariant="normal">Δ</mi></mrow><mi>j</mi></mrow><annotation encoding="application/x-tex">\Delta j</annotation></semantics></math> running over <math><semantics><mrow><mo>−</mo><mn>1</mn><mo separator="true">,</mo><mn>0</mn><mo separator="true">,</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">-1, 0, 1</annotation></semantics></math>. The same weights <math><semantics><mi>W</mi><annotation encoding="application/x-tex">W</annotation></semantics></math> are used on all 25 squares, so a pattern learned in one corner works everywhere. Outside the board, inputs are zero.</p>
+            </div>
+            <div class="table-wrap">
+              <table class="data">
+                <thead><tr><th>Layer</th><th>Output</th><th>Weights</th></tr></thead>
+                <tbody>
+                  <tr><td colspan="3"><b>Policy network <math><semantics><msub><mi>π</mi><mi>θ</mi></msub><annotation encoding="application/x-tex">\pi_\theta</annotation></semantics></math></b></td></tr>
+                  <tr><td>Stem: 3×3 convolution, ReLU</td><td>64 × 5 × 5</td><td>8,704</td></tr>
+                  <tr><td>4 residual blocks, two 3×3 convolutions each</td><td>64 × 5 × 5</td><td>4 × 73,856</td></tr>
+                  <tr><td>Policy head: 1×1 convolution</td><td>3 × 5 × 5 = 75 scores</td><td>195</td></tr>
+                  <tr><td><b>Policy total</b></td><td></td><td><b>304,323</b></td></tr>
+                  <tr><td colspan="3"><b>Value network <math><semantics><msub><mi>V</mi><mi>ϕ</mi></msub><annotation encoding="application/x-tex">V_\phi</annotation></semantics></math></b></td></tr>
+                  <tr><td>Stem and 4 residual blocks</td><td>32 × 5 × 5</td><td>78,336</td></tr>
+                  <tr><td>Value head: 1×1 convolution, 100 → 128 → 1</td><td>1 value</td><td>13,189</td></tr>
+                  <tr><td><b>Value total</b></td><td></td><td><b>91,525</b></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>The policy head's three planes mean "place or build here", "move worker 1 here" and "move worker 2 here". Flattened, they line up exactly with the 75 actions, so each action is scored at the square it concerns.</p>
+            <div class="code-label"><span>server/rl/model.py</span><span>shortened</span></div>
+            <pre><code>class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.first = nn.Conv2d(channels, channels, 3, padding=1)
+        self.second = nn.Conv2d(channels, channels, 3, padding=1)
+        <span class="c"># Each block starts as the identity.</span>
+        nn.init.zeros_(self.second.weight)
+        nn.init.zeros_(self.second.bias)
+
+    def forward(self, x):
+        inner = torch.relu(self.first(x))
+        return torch.relu(x + self.second(inner))
+
+
+class ConvPolicy(nn.Module):
+    <span class="c"># pi_theta: 3 planes x 25 squares = 75 scores</span>
+    def __init__(self, channels=64, blocks=4):
+        super().__init__()
+        self.stem, self.tower = residual_trunk(channels, blocks)
+        self.policy = nn.Conv2d(channels, 3, 1)
+
+    def forward(self, observations, masks):
+        features = self.tower(self.stem(planes(observations)))
+        scores = self.policy(features).flatten(1)
+        return masked_distribution(scores, masks)
+
+
+class ConvValue(nn.Module):
+    <span class="c"># V_phi: its own trunk, then 4 planes -> 128 -> 1</span>
+    def __init__(self, channels=32, blocks=4):
+        super().__init__()
+        self.stem, self.tower = residual_trunk(channels, blocks)
+        self.value = nn.Sequential(
+            nn.Conv2d(channels, 4, 1), nn.ReLU(), nn.Flatten(),
+            nn.Linear(100, 128), nn.ReLU(), nn.Linear(128, 1))
+
+    def forward(self, observations):
+        features = self.tower(self.stem(planes(observations)))
+        return self.value(features).squeeze(-1)
+
+
+class SeparateActorCritic(nn.Module):
+    <span class="c"># Like Spinning Up's ac.pi and ac.v</span>
+    def __init__(self):
+        super().__init__()
+        self.pi = ConvPolicy(64, 4)
+        self.v = ConvValue(32, 4)</code></pre>
+          </div>
+        </details>
+      </section>
+
+      <section id="move">
+        <h2>Choosing a move</h2>
+        <p class="takeaway">Scores for all 75 actions become probabilities over the legal ones, and the agent rolls the dice.</p>
+        <p>The rules engine supplies a <em>mask</em> of legal actions; illegal ones get probability zero. The agent then <em>samples</em> its move, so a 60% favourite is played about six times in ten. That keeps it varied, and it is exactly how it trained.</p>
+
+        <figure class="widget" id="live-widget">
+          <div class="widget-head"><h3>From scores to a move</h3><span>Try it</span></div>
+          <div class="split">
+            <svg class="board-svg" id="live-board" viewBox="0 0 300 300" role="img" aria-label="The board with the agent's move probabilities"></svg>
+            <div class="agent-panel">
+              <p class="readout who" id="live-who">The network loads when you reach this figure.</p>
+              <div class="softmax-head" aria-hidden="true"><span>Move</span><span>Score <math><semantics><mi>z</mi><annotation encoding="application/x-tex">z</annotation></semantics></math></span><span>Probability <math><semantics><mi>π</mi><annotation encoding="application/x-tex">\pi</annotation></semantics></math></span></div>
+              <ol class="softmax" id="live-bars" aria-label="Scores and probabilities of the most likely legal actions"></ol>
+              <div class="stat-row">
+                <div><b id="live-value">–</b>value <math><semantics><mrow><msub><mi>V</mi><mi>ϕ</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>s</mi><mo form="postfix" stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">V_\phi(s)</annotation></semantics></math>: the value network's guess, <math><semantics><mrow><mo>−</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">-1</annotation></semantics></math> to <math><semantics><mrow><mo>+</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">+1</annotation></semantics></math></div>
+                <div><b id="live-entropy">–</b>entropy: choosing between about <span id="live-choices">–</span> moves</div>
+              </div>
+            </div>
+          </div>
+          <div class="controls">
+            <button class="button primary" id="live-step" type="button" disabled>Sample a move</button>
+            <button class="button" id="live-reset" type="button" disabled>Back to the example</button>
+            <button class="button quiet" id="live-new" type="button" disabled>New game</button>
+          </div>
+          <figcaption>The Hard policy network playing both sides in your browser. Rings on the board show probabilities; the list shows how raw scores turn into probabilities. Sampling picks a move at random with those probabilities.</figcaption>
+        </figure>
+
+        <div class="key-eq">
+          <span class="eq-label">Masked softmax</span>
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>a</mi><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><mi>s</mi><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mo>=</mo><mfrac><mrow><mi>m</mi><mo form="prefix" stretchy="false">(</mo><mi>a</mi><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><mi>s</mi><mo form="postfix" stretchy="false">)</mo><mspace width="0.2778em"></mspace><msup><mi>e</mi><msub><mi>z</mi><mi>a</mi></msub></msup></mrow><mstyle scriptlevel="0" displaystyle="true"><mrow><munderover><mo movablelimits="false">∑</mo><mrow><mi>b</mi><mo>=</mo><mn>1</mn></mrow><mn>75</mn></munderover></mrow><mi>m</mi><mo form="prefix" stretchy="false">(</mo><mi>b</mi><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><mi>s</mi><mo form="postfix" stretchy="false">)</mo><mspace width="0.2778em"></mspace><msup><mi>e</mi><msub><mi>z</mi><mi>b</mi></msub></msup></mstyle></mfrac></mrow><annotation encoding="application/x-tex">\class{v-policy}{\pi_\theta(a \mid s)} = \frac{m(a \mid s)\; e^{z_a}}{\displaystyle\sum_{b=1}^{75} m(b \mid s)\; e^{z_b}}</annotation></semantics></math></div>
+          <p class="reading">Raise <math><semantics><mi>e</mi><annotation encoding="application/x-tex">e</annotation></semantics></math> to each legal score <math><semantics><mi>z</mi><annotation encoding="application/x-tex">z</annotation></semantics></math> and divide by the total: the probabilities are positive and add up to 1. The mask <math><semantics><mi>m</mi><annotation encoding="application/x-tex">m</annotation></semantics></math> is 1 for legal actions and 0 otherwise.</p>
+        </div>
+        <details class="deep">
+          <summary>Show the math</summary>
+          <div class="deep-body">
+            <div class="eq">
+              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><mi>H</mi><mo form="prefix" stretchy="false">(</mo><mi class="v-policy">π</mi><mo form="postfix" stretchy="false">)</mo><mo>=</mo><mo form="prefix" stretchy="false">−</mo><mrow><munder><mo movablelimits="false">∑</mo><mi>a</mi></munder></mrow><mrow class="v-policy"><mi>π</mi><mo form="prefix" stretchy="false">(</mo><mi>a</mi><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><mi>s</mi><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mspace width="0.1667em"></mspace><mrow><mspace width="0.1667em"></mspace><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mrow class="v-policy"><mi>π</mi><mo form="prefix" stretchy="false">(</mo><mi>a</mi><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><mi>s</mi><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mrow><annotation encoding="application/x-tex">H(\class{v-policy}{\pi}) = -\sum_{a} \class{v-policy}{\pi(a \mid s)}\, \log \class{v-policy}{\pi(a \mid s)}</annotation></semantics></math></div>
+              <p class="reading"><b>Entropy</b> measures how undecided the policy is. Spread evenly over <math><semantics><mi>n</mi><annotation encoding="application/x-tex">n</annotation></semantics></math> moves, <math><semantics><mrow><mi>H</mi><mo>=</mo><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mi>n</mi></mrow><annotation encoding="application/x-tex">H = \log n</annotation></semantics></math>, so <math><semantics><msup><mi>e</mi><mi>H</mi></msup><annotation encoding="application/x-tex">e^{H}</annotation></semantics></math> reads as "the number of moves it is really choosing between". Certainty gives <math><semantics><mrow><mi>H</mi><mo>=</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">H = 0</annotation></semantics></math>.</p>
+            </div>
+            <p>In the code, illegal scores are set to <math><semantics><mrow><mo>−</mo><msup><mn>10</mn><mn>9</mn></msup></mrow><annotation encoding="application/x-tex">-10^{9}</annotation></semantics></math> before an ordinary softmax, which has the same effect as the mask. The coach's hint shows the single most likely move; the agent itself always samples.</p>
+          </div>
+        </details>
+      </section>
+
+      <section id="play">
+        <h2>Playing to learn</h2>
+        <p class="takeaway">Many games run at once against a mix of opponents, and every decision the learner makes goes into the batch.</p>
+        <figure class="widget" id="mix-widget">
+          <div class="widget-head"><h3>Who it plays against</h3></div>
+          <div class="mix" id="mix" role="img" aria-label="Opponent mix: random 10%, tactical 15%, one-move lookahead 35%, copies of itself 40%"></div>
+          <div class="mix-notes">
+            <p><b class="sw random">Random</b> any legal move.</p>
+            <p><b class="sw tactical">Tactical</b> takes wins, climbs, domes threats.</p>
+            <p><b class="sw lookahead">Lookahead</b> checks every complete turn ahead.</p>
+            <p><b class="sw selves">Itself</b> one of its ten latest snapshots, or an earlier agent.</p>
+          </div>
+          <figcaption>Fixed programs teach it to punish mistakes; copies of itself keep raising the bar as it improves. Each game keeps one opponent, and the learner's seat alternates between games.</figcaption>
+        </figure>
+        <div class="batch">
+          <div class="batch-step"><b>128 games at once</b>8 processes, each stepping 16 games in lockstep</div>
+          <div class="batch-step"><b>128 decisions each</b>position, legal mask, action, its probability, the value, reward</div>
+          <div class="batch-step"><b>16,384 decisions</b>make the batch <math><semantics><msub><mi class="mathcal">𝒟</mi><mi>k</mi></msub><annotation encoding="application/x-tex">\mathcal{D}_k</annotation></semantics></math> for one update</div>
+        </div>
+        <p class="note"><b>The opponent is part of the environment.</b> From the learner's point of view, the next state <math><semantics><msub><mi>s</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><annotation encoding="application/x-tex">s_{t+1}</annotation></semantics></math> is simply the next position where it has to decide, after the opponent has replied. Rewards are <math><semantics><mrow><mo>+</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">+1</annotation></semantics></math> for a win, <math><semantics><mrow><mo>−</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">-1</annotation></semantics></math> for a loss and 0 otherwise: nothing for height or threats.</p>
+      </section>
+
+      <section id="advantage">
+        <h2>Better than expected?</h2>
+        <p class="takeaway">An advantage says how much better a decision turned out than the value network expected. It is worked out backwards from the end of the game.</p>
+        <p>The result alone is a blunt signal: a won game can contain bad moves. The value network sharpens it. Where its value <em>rose</em> after a decision, that decision gets a positive advantage; where it fell, a negative one. These are lines 4 and 5 of the pseudocode: rewards-to-go <math><semantics><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><annotation encoding="application/x-tex">\hat{R}_t</annotation></semantics></math> as targets for the value network, and advantages <math><semantics><msub><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><annotation encoding="application/x-tex">\hat{A}_t</annotation></semantics></math> for the policy.</p>
+
+        <figure class="widget" id="gae-widget">
+          <div class="widget-head"><h3>Advantages in the example game</h3><span>Try it</span></div>
+          <svg class="chart" id="gae-chart" viewBox="0 0 640 300" role="img" aria-label="Critic values and advantages for each of the learner's decisions"></svg>
+          <div class="legend"><span class="key value">value <math><semantics><mrow><msub><mi>V</mi><mi>ϕ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">V_\phi(s_t)</annotation></semantics></math></span><span class="key advantage">advantage <math><semantics><msub><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><annotation encoding="application/x-tex">\hat{A}_t</annotation></semantics></math>, above zero</span><span class="key negative">below zero</span></div>
+          <div class="controls">
+            <div class="segmented" role="group" aria-label="Result of the game">
+              <button type="button" id="gae-win" aria-pressed="true">Coral won</button><button type="button" id="gae-loss" aria-pressed="false">What if it lost?</button>
+            </div>
+            <label class="control"><span>Discount <math><semantics><mi>γ</mi><annotation encoding="application/x-tex">\gamma</annotation></semantics></math> <output id="gae-gamma-out"></output></span><input id="gae-gamma" type="range" min="0.8" max="1" step="0.01" value="0.99"></label>
+            <label class="control"><span>GAE <math><semantics><mi>λ</mi><annotation encoding="application/x-tex">\lambda</annotation></semantics></math> <output id="gae-lambda-out"></output></span><input id="gae-lambda" type="range" min="0" max="1" step="0.01" value="0.97"></label>
+            <button class="button" id="gae-sweep" type="button">Sweep backwards</button>
+          </div>
+          <p class="readout" id="gae-readout" aria-live="polite"></p>
+          <figcaption id="gae-caption">Coral's decisions from the training loop above. Hover or select a decision for its numbers.</figcaption>
+        </figure>
+
+        <div class="key-eq">
+          <span class="eq-label">Generalized advantage estimation</span>
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><msub class="v-adv"><mi>δ</mi><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><msub><mi>r</mi><mi>t</mi></msub><mo>+</mo><mi>γ</mi><mspace width="0.1667em"></mspace><mrow class="v-value"><mi>V</mi><mo form="prefix" stretchy="false">(</mo><msub><mi>s</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mo>−</mo><mrow class="v-value"><mi>V</mi><mo form="prefix" stretchy="false">(</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><msub class="v-adv"><mi>δ</mi><mi>t</mi></msub><mo>+</mo><mi>γ</mi><mi>λ</mi><mspace width="0.1667em"></mspace><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} \class{v-adv}{\delta_t} &amp;= r_t + \gamma\, \class{v-value}{V(s_{t+1})} - \class{v-value}{V(s_t)} \\ \class{v-adv}{\hat{A}_t} &amp;= \class{v-adv}{\delta_t} + \gamma\lambda\, \class{v-adv}{\hat{A}_{t+1}} \end{aligned}</annotation></semantics></math></div>
+          <p class="reading">The surprise <math><semantics><msub><mi>δ</mi><mi>t</mi></msub><annotation encoding="application/x-tex">\delta_t</annotation></semantics></math> is the reward plus the value of where you landed, minus the value of where you were. The advantage adds a fading share (<math><semantics><mrow><mi>γ</mi><mi>λ</mi></mrow><annotation encoding="application/x-tex">\gamma\lambda</annotation></semantics></math> per step, with Spinning Up's <math><semantics><mrow><mi>λ</mi><mo>=</mo><mn>0.97</mn></mrow><annotation encoding="application/x-tex">\lambda = 0.97</annotation></semantics></math>) of every later surprise. With <math><semantics><mrow><mi>λ</mi><mo>=</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\lambda = 0</annotation></semantics></math> it is one step of surprise; with <math><semantics><mrow><mi>λ</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">\lambda = 1</annotation></semantics></math> it is the final result minus the value network's guess.</p>
+        </div>
+
+        <details class="deep">
+          <summary>Show the math and the code</summary>
+          <div class="deep-body">
+            <div class="eq">
+              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mrow><munderover><mo movablelimits="false">∑</mo><mrow><mi>k</mi><mo>=</mo><mn>0</mn></mrow><mrow><mi>T</mi><mo>−</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></munderover></mrow><msup><mi>γ</mi><mi>k</mi></msup><mspace width="0.1667em"></mspace><msub><mi>r</mi><mrow><mi>t</mi><mo>+</mo><mi>k</mi></mrow></msub></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><mrow class="v-value"><msub><mi>V</mi><mi>ϕ</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>s</mi><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mtd><mtd class="tml-left ms3"><mrow><mo>≈</mo><mi>𝔼</mi><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">[</mo><mspace width="0.1667em"></mspace><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo>=</mo><mi>s</mi><mspace width="0.1667em"></mspace><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">]</mo></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} \hat{R}_t &amp;= \sum_{k=0}^{T-t-1} \gamma^{k}\, r_{t+k} \\ \class{v-value}{V_\phi(s)} &amp;\approx \mathbb{E}\big[\,\hat{R}_t \mid s_t = s\,\big] \end{aligned}</annotation></semantics></math></div>
+              <p class="reading"><b>Rewards-to-go and value:</b> <math><semantics><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><annotation encoding="application/x-tex">\hat{R}_t</annotation></semantics></math> adds up the rewards from decision <math><semantics><mi>t</mi><annotation encoding="application/x-tex">t</annotation></semantics></math> to the end of the game, each one <math><semantics><mrow><mi>γ</mi><mo>=</mo><mn>0.99</mn></mrow><annotation encoding="application/x-tex">\gamma = 0.99</annotation></semantics></math> times less per decision. Because the only reward comes at the end, a win <math><semantics><mi>k</mi><annotation encoding="application/x-tex">k</annotation></semantics></math> decisions away is worth <math><semantics><msup><mi>γ</mi><mi>k</mi></msup><annotation encoding="application/x-tex">\gamma^{k}</annotation></semantics></math> now. The value network is fitted to <math><semantics><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><annotation encoding="application/x-tex">\hat{R}_t</annotation></semantics></math> in line 7. When the batch ends mid-game, the sum is completed with the value of the next position, as Spinning Up does.</p>
+            </div>
+            <figure class="widget compact" id="discount-widget">
+              <div class="widget-head"><h3>The discount factor</h3><span>Try it</span></div>
+              <svg class="chart" id="discount-chart" viewBox="0 0 640 190" role="img" aria-label="What a win k decisions away is worth now"></svg>
+              <div class="controls">
+                <label class="control"><span>Discount <math><semantics><mi>γ</mi><annotation encoding="application/x-tex">\gamma</annotation></semantics></math> <output id="gamma-out">0.99</output></span><input id="gamma" type="range" min="0.8" max="1" step="0.005" value="0.99"></label>
+              </div>
+              <p class="readout" id="discount-readout" aria-live="polite"></p>
+            </figure>
+            <div class="eq">
+              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><mo>=</mo><mrow><munderover><mo movablelimits="false">∑</mo><mrow><mi>l</mi><mo>=</mo><mn>0</mn></mrow><mi>∞</mi></munderover></mrow><mo form="prefix" stretchy="false">(</mo><mi>γ</mi><mi>λ</mi><msup><mo form="postfix" stretchy="false">)</mo><mi>l</mi></msup><mspace width="0.1667em"></mspace><msub class="v-adv"><mi>δ</mi><mrow><mi>t</mi><mo>+</mo><mi>l</mi></mrow></msub></mrow><annotation encoding="application/x-tex">\class{v-adv}{\hat{A}_t} = \sum_{l=0}^{\infty} (\gamma\lambda)^{l}\, \class{v-adv}{\delta_{t+l}}</annotation></semantics></math></div>
+              <p class="reading"><b>Unrolled:</b> the advantage is a discounted sum of surprises, with <math><semantics><mrow><mi>λ</mi><mo>=</mo><mn>0.97</mn></mrow><annotation encoding="application/x-tex">\lambda = 0.97</annotation></semantics></math>. At the end of a game the sum stops; a game cut off at 400 actions still adds the value of its last position.</p>
+            </div>
+            <div class="eq">
+              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><mo stretchy="false">←</mo><mfrac><mrow><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><mo>−</mo><mi>mean</mi><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><mover class="v-adv"><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mrow><mi>std</mi><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><mover class="v-adv"><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mo form="postfix" stretchy="false">)</mo><mo>+</mo><msup><mn>10</mn><mrow><mo lspace="0em" rspace="0em">−</mo><mn>8</mn></mrow></msup></mrow></mfrac></mrow><annotation encoding="application/x-tex">\class{v-adv}{\hat{A}_t} \leftarrow \frac{\class{v-adv}{\hat{A}_t} - \operatorname{mean}(\class{v-adv}{\hat{A}})}{\operatorname{std}(\class{v-adv}{\hat{A}}) + 10^{-8}}</annotation></semantics></math></div>
+              <p class="reading"><b>Normalising:</b> before the update, advantages are rescaled across the batch to average 0 and spread 1, so step sizes do not depend on how large rewards happen to be.</p>
+            </div>
+            <div class="code-label"><span>server/rl/ppo.py</span><span>shortened</span></div>
+            <pre><code>def compute_gae(rewards, values, next_values, terminated,
+                boundaries, gamma=0.99, gae_lambda=0.97):
+    advantages = torch.zeros_like(rewards)
+    running = torch.zeros(rewards.shape[1:])
+    <span class="c"># Backwards from the end of the batch.</span>
+    for t in reversed(range(len(rewards))):
+        alive = (~terminated[t]).float()
+        delta = rewards[t] + gamma * next_values[t] * alive - values[t]
+        carry = gamma * gae_lambda * (~boundaries[t]).float()
+        running = delta + carry * running
+        advantages[t] = running
+    return advantages
+
+
+def rewards_to_go(rewards, next_values, terminated, boundaries,
+                  gamma=0.99):
+    returns = torch.zeros_like(rewards)
+    last = len(rewards) - 1
+    for t in reversed(range(len(rewards))):
+        <span class="c"># A real ending adds nothing; a cut adds the next value.</span>
+        bootstrap = next_values[t] * (~terminated[t]).float()
+        if t == last:
+            tail = bootstrap
+        else:
+            tail = torch.where(boundaries[t], bootstrap, returns[t + 1])
+        returns[t] = rewards[t] + gamma * tail
+    return returns</code></pre>
+          </div>
+        </details>
+      </section>
+
+      <section id="clip">
+        <h2>The PPO-Clip objective</h2>
+        <p class="takeaway">Make better-than-expected moves more likely and worse ones less likely, but stop once a probability has moved by 20%.</p>
+        <p>The update reuses each batch for several passes. To keep it honest, it compares the new probability of each recorded move with the old one through a <em>ratio</em> <math><semantics><mi>ρ</mi><annotation encoding="application/x-tex">\rho</annotation></semantics></math>, and clips the objective so there is nothing to gain from pushing <math><semantics><mi>ρ</mi><annotation encoding="application/x-tex">\rho</annotation></semantics></math> outside <math><semantics><mrow><mo form="prefix" stretchy="false">[</mo><mn>0.8</mn><mo separator="true">,</mo><mtext> </mtext><mn>1.2</mn><mo form="postfix" stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">[0.8,\ 1.2]</annotation></semantics></math>.</p>
+
+        <figure class="widget" id="clip-widget">
+          <div class="widget-head"><h3>The objective for one decision</h3><span>Try it</span></div>
+          <svg class="chart" id="clip-chart" viewBox="0 0 640 296" role="img" aria-label="The PPO objective as a function of the probability ratio"></svg>
+          <div class="controls">
+            <div class="segmented" role="group" aria-label="Sign of the advantage">
+              <button type="button" id="clip-good" aria-pressed="true">Better than expected</button><button type="button" id="clip-bad" aria-pressed="false">Worse than expected</button>
+            </div>
+            <label class="control"><span>Ratio <math><semantics><mi>ρ</mi><annotation encoding="application/x-tex">\rho</annotation></semantics></math> <output id="clip-rho-out"></output></span><input id="clip-rho" type="range" min="0" max="2" step="0.01" value="1.3"></label>
+            <label class="control"><span>Clip range <math><semantics><mi>ϵ</mi><annotation encoding="application/x-tex">\epsilon</annotation></semantics></math> <output id="clip-eps-out"></output></span><input id="clip-eps" type="range" min="0.05" max="0.5" step="0.05" value="0.2"></label>
+          </div>
+          <p class="readout" id="clip-readout" aria-live="polite"></p>
+          <figcaption>Dashed: the unclipped objective <math><semantics><mrow><mi>ρ</mi><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover></mrow><annotation encoding="application/x-tex">\rho\hat{A}</annotation></semantics></math>. Solid: what PPO maximises. Where the solid line is flat (shaded), the gradient is zero and this decision stops pulling on the weights.</figcaption>
+        </figure>
+
+        <figure class="widget" id="nudge-widget">
+          <div class="widget-head"><h3>Watch the clip stop an update</h3><span>Try it</span></div>
+          <div class="nudge" id="nudge"></div>
+          <div class="controls">
+            <label class="control"><span>Decision from the example game <output id="nudge-out"></output></span><input id="nudge-pick" type="range" min="0" max="20" step="1" value="9"></label>
+            <button class="button primary" id="nudge-run" type="button">Run the update</button>
+          </div>
+          <p class="readout" id="nudge-readout" aria-live="polite"></p>
+          <figcaption>To make one update visible, only this decision's scores change here, by gradient ascent on the clipped objective. The real policy step does the same with all of the policy network's weights, in minibatches of 2,048 of the batch's 16,384 decisions, stopping early when the policy has moved far enough.</figcaption>
+        </figure>
+
+        <div class="key-eq">
+          <span class="eq-label">The clipped surrogate objective</span>
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><msup><mi>L</mi><mtext>CLIP</mtext></msup></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><msub><mover><mi>𝔼</mi><mo stretchy="false" class="ms1">^</mo></mover><mi>t</mi></msub><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">[</mo><mrow><mi>min</mi><mo>⁡</mo></mrow><mo form="prefix" stretchy="false">(</mo><msub><mi>u</mi><mi>t</mi></msub><mo separator="true">,</mo><mspace width="0.2778em"></mspace><msub><mi>v</mi><mi>t</mi></msub><mo form="postfix" stretchy="false">)</mo><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">]</mo></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><msub><mi>u</mi><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><msub class="v-policy"><mi>ρ</mi><mi>t</mi></msub><mspace width="0.1667em"></mspace><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><msub><mi>v</mi><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mi>clip</mi><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><msub class="v-policy"><mi>ρ</mi><mi>t</mi></msub><mo separator="true">,</mo><mspace width="0.1667em"></mspace><mrow class="v-limit"><mn>1</mn><mo>−</mo><mi>ϵ</mi></mrow><mo separator="true">,</mo><mspace width="0.1667em"></mspace><mrow class="v-limit"><mn>1</mn><mo>+</mo><mi>ϵ</mi></mrow><mo form="postfix" stretchy="false">)</mo><mspace width="0.1667em"></mspace><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><msub class="v-policy"><mi>ρ</mi><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mfrac><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mrow class="v-policy"><msub><mi>π</mi><mtext>old</mtext></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mfrac></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} L^{\text{CLIP}} &amp;= \hat{\mathbb{E}}_t\big[\min(u_t,\; v_t)\big] \\ u_t &amp;= \class{v-policy}{\rho_t}\,\class{v-adv}{\hat{A}_t} \\ v_t &amp;= \operatorname{clip}(\class{v-policy}{\rho_t},\, \class{v-limit}{1-\epsilon},\, \class{v-limit}{1+\epsilon})\,\class{v-adv}{\hat{A}_t} \\ \class{v-policy}{\rho_t} &amp;= \frac{\class{v-policy}{\pi_\theta(a_t \mid s_t)}}{\class{v-policy}{\pi_{\text{old}}(a_t \mid s_t)}} \end{aligned}</annotation></semantics></math></div>
+          <p class="reading">Take the smaller of the plain objective <math><semantics><msub><mi>u</mi><mi>t</mi></msub><annotation encoding="application/x-tex">u_t</annotation></semantics></math> and the clipped one <math><semantics><msub><mi>v</mi><mi>t</mi></msub><annotation encoding="application/x-tex">v_t</annotation></semantics></math>. Moving a probability more than <math><semantics><mrow><mi>ϵ</mi><mo>=</mo><mn>0.2</mn></mrow><annotation encoding="application/x-tex">\epsilon = 0.2</annotation></semantics></math> in the helpful direction earns nothing extra; moving it in the harmful direction is never clipped, so mistakes are paid for in full.</p>
+        </div>
+
+        <details class="deep">
+          <summary>Show the math and the code</summary>
+          <div class="deep-body">
+            <div class="eq">
+              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><msub><mo>∇</mo><mi>θ</mi></msub><mi>J</mi><mo form="prefix" stretchy="false">(</mo><mi>θ</mi><mo form="postfix" stretchy="false">)</mo><mo>=</mo><msub><mi>𝔼</mi><mi>t</mi></msub><mspace width="-0.1667em" class="ms4"></mspace><mrow><mo fence="true" form="prefix">[</mo><mspace width="0.1667em"></mspace><msub><mo>∇</mo><mi>θ</mi></msub><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mspace width="0.2778em"></mspace><msub class="v-adv"><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><mspace width="0.1667em"></mspace><mo fence="true" form="postfix">]</mo></mrow></mrow><annotation encoding="application/x-tex">\nabla_\theta J(\theta) = \mathbb{E}_t\!\left[\, \nabla_\theta \log \class{v-policy}{\pi_\theta(a_t \mid s_t)}\; \class{v-adv}{\hat{A}_t} \,\right]</annotation></semantics></math></div>
+              <p class="reading"><b>Where it starts, the policy gradient:</b> to win more often, raise the log-probability of each action in proportion to its advantage (Williams, 1992; Sutton et al., 2000). Followed naively, each batch supports only one small step, and a step slightly too big can collapse the policy onto a few moves.</p>
+            </div>
+            <div class="eq">
+              <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><mrow class="v-policy"><msub><mi>ρ</mi><mi>t</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>θ</mi><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mfrac><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mrow class="v-policy"><msub><mi>π</mi><mtext>old</mtext></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mfrac></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><mrow></mrow></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mrow><mi>exp</mi><mo>⁡</mo></mrow><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">(</mo><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><mrow></mrow></mtd><mtd class="tml-left ms3"><mrow><mspace width="2em"></mspace><mspace width="0.2778em"></mspace><mo>−</mo><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mrow class="v-policy"><msub><mi>π</mi><mtext>old</mtext></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">)</mo></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} \class{v-policy}{\rho_t(\theta)} &amp;= \frac{\class{v-policy}{\pi_\theta(a_t \mid s_t)}}{\class{v-policy}{\pi_{\text{old}}(a_t \mid s_t)}} \\ &amp;= \exp\big(\log \class{v-policy}{\pi_\theta(a_t \mid s_t)} \\ &amp;\qquad\; - \log \class{v-policy}{\pi_{\text{old}}(a_t \mid s_t)}\big) \end{aligned}</annotation></semantics></math></div>
+              <p class="reading"><b>The ratio</b> starts at 1, because the weights being trained begin equal to the ones that played. <math><semantics><mrow><msub><mi>ρ</mi><mi>t</mi></msub><msub><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub></mrow><annotation encoding="application/x-tex">\rho_t\hat{A}_t</annotation></semantics></math> has the policy gradient's gradient at <math><semantics><mrow><msub><mi>ρ</mi><mi>t</mi></msub><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">\rho_t = 1</annotation></semantics></math>, and lets the same batch be reused for several passes. The clip keeps those passes from running away.</p>
+            </div>
+            <div class="table-wrap">
+              <table class="data">
+                <thead><tr><th>Advantage</th><th>Ratio</th><th>What PPO does</th></tr></thead>
+                <tbody>
+                  <tr><td><math><semantics><mrow><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mo>&gt;</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\hat{A} &gt; 0</annotation></semantics></math></td><td><math><semantics><mrow><mi>ρ</mi><mo>≤</mo><mn>1</mn><mo>+</mo><mi>ϵ</mi></mrow><annotation encoding="application/x-tex">\rho \le 1+\epsilon</annotation></semantics></math></td><td>Makes the action more likely</td></tr>
+                  <tr><td><math><semantics><mrow><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mo>&gt;</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\hat{A} &gt; 0</annotation></semantics></math></td><td><math><semantics><mrow><mi>ρ</mi><mo>&gt;</mo><mn>1</mn><mo>+</mo><mi>ϵ</mi></mrow><annotation encoding="application/x-tex">\rho &gt; 1+\epsilon</annotation></semantics></math></td><td>Nothing: it has moved enough</td></tr>
+                  <tr><td><math><semantics><mrow><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mo>&lt;</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\hat{A} &lt; 0</annotation></semantics></math></td><td><math><semantics><mrow><mi>ρ</mi><mo>≥</mo><mn>1</mn><mo>−</mo><mi>ϵ</mi></mrow><annotation encoding="application/x-tex">\rho \ge 1-\epsilon</annotation></semantics></math></td><td>Makes the action less likely</td></tr>
+                  <tr><td><math><semantics><mrow><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mo>&lt;</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\hat{A} &lt; 0</annotation></semantics></math></td><td><math><semantics><mrow><mi>ρ</mi><mo>&lt;</mo><mn>1</mn><mo>−</mo><mi>ϵ</mi></mrow><annotation encoding="application/x-tex">\rho &lt; 1-\epsilon</annotation></semantics></math></td><td>Nothing: it has moved enough</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="code-label"><span>server/rl/ppo.py</span><span>type hints removed</span></div>
+            <pre><code>def clipped_policy_loss(log_probs, old_log_probs, advantages, clip):
+    ratio = (log_probs - old_log_probs).exp()
+    ordinary = ratio * advantages
+    clipped = ratio.clamp(1 - clip, 1 + clip) * advantages
+    <span class="c"># Minus, because optimisers minimise.</span>
+    return -torch.minimum(ordinary, clipped).mean()</code></pre>
+          </div>
+        </details>
+      </section>
+
+      <section id="update">
+        <h2>One update</h2>
+        <p class="takeaway">Each update makes two separate fits, as in Spinning Up: first the policy, with a brake, then the value network. Both use a few quick passes over the batch.</p>
+        <div class="recipe two" aria-label="Line 6 improves the policy; line 7 fits the value network">
+          <div class="ingredient policy"><span class="op">Line 6</span><b><math><semantics><mrow><msub><mi>max</mi><mi>θ</mi></msub><mo>⁡</mo><mspace width="0.1667em"></mspace><msup><mi>L</mi><mtext>CLIP</mtext></msup></mrow><annotation encoding="application/x-tex">\max_\theta L^{\text{CLIP}}</annotation></semantics></math></b><small>4 passes over the batch in minibatches of 2,048: up to 32 Adam steps on <math><semantics><mi>θ</mi><annotation encoding="application/x-tex">\theta</annotation></semantics></math>, stopping once the KL passes 0.015</small></div>
+          <div class="ingredient value"><span class="op">Line 7</span><b><math><semantics><mrow><msub><mi>min</mi><mi>ϕ</mi></msub><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><msub><mi>V</mi><mi>ϕ</mi></msub><mo>−</mo><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><msup><mo form="postfix" stretchy="false">)</mo><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">\min_\phi (V_\phi - \hat{R})^2</annotation></semantics></math></b><small>4 passes in minibatches of 2,048: 32 Adam steps on <math><semantics><mi>ϕ</mi><annotation encoding="application/x-tex">\phi</annotation></semantics></math>, learning rate 0.001</small></div>
+        </div>
+
+        <figure class="widget" id="steps-widget">
+          <div class="widget-head"><h3>Inside the real updates</h3><span>Try it</span></div>
+          <label class="control wide-control"><span>Update <output id="steps-out"></output></span><input id="steps-pick" type="range" min="0" max="1" step="1" value="0"></label>
+          <div class="steps" id="steps"></div>
+          <p class="readout" id="steps-readout" aria-live="polite"></p>
+          <figcaption>From the training log. Each square is one gradient step. The policy steps stop as soon as the estimated KL from the policy that played the games passes 1.5 × 0.01; the value steps always run in full. The first 710 updates used Spinning Up's own default of up to 80 full-batch steps each; after that, 4 passes in minibatches of 2,048, about ten times cheaper for this game.</figcaption>
+        </figure>
+
+        <div class="key-eq">
+          <span class="eq-label">The early stop</span>
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><msub><mover><mi>D</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mrow><mtext></mtext><mi>KL</mi></mrow></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><msub><mover><mi>𝔼</mi><mo stretchy="false" class="ms1">^</mo></mover><mi>t</mi></msub><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">[</mo><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mrow class="v-policy"><msub><mi>π</mi><msub><mi>θ</mi><mi>k</mi></msub></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><mrow></mrow></mtd><mtd class="tml-left ms3"><mrow><mspace width="2em"></mspace><mspace width="0.2778em"></mspace><mo>−</mo><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mrow class="v-policy"><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">]</mo></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><mrow><mtext>stop when </mtext><msub><mover><mi>D</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mrow><mtext></mtext><mi>KL</mi></mrow></msub></mrow></mtd><mtd class="tml-left ms3"><mrow><mo>&gt;</mo><mn>1.5</mn><mo>×</mo><mn>0.01</mn></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} \hat{D}_{\mathrm{KL}} &amp;= \hat{\mathbb{E}}_t\big[\log \class{v-policy}{\pi_{\theta_k}(a_t \mid s_t)} \\ &amp;\qquad\; - \log \class{v-policy}{\pi_\theta(a_t \mid s_t)}\big] \\ \text{stop when } \hat{D}_{\mathrm{KL}} &amp;&gt; 1.5 \times 0.01 \end{aligned}</annotation></semantics></math></div>
+          <p class="reading">Before each policy step, the trainer estimates the KL divergence between the policy that played the games and the one being trained, from log-probabilities it already has. Past 0.015, the policy has moved far enough for one batch.</p>
+        </div>
+
+        <details class="deep">
+          <summary>Is KL part of PPO-Clip? Plus the code</summary>
+          <div class="deep-body">
+            <p><b>The KL check is a brake, not part of the objective.</b> PPO-Clip's objective needs no KL divergence: the clip replaces it. (The paper's other variant, PPO-Penalty, adds a KL term to the loss instead.) Spinning Up adds this early stop because the clip is not a hard limit: it zeroes the gradient only for decisions already outside <math><semantics><mrow><mo form="prefix" stretchy="false">[</mo><mn>1</mn><mo>−</mo><mi>ϵ</mi><mo separator="true">,</mo><mtext> </mtext><mn>1</mn><mo>+</mo><mi>ϵ</mi><mo form="postfix" stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">[1-\epsilon,\ 1+\epsilon]</annotation></semantics></math>, while the others can keep moving the shared weights. The estimate never enters the gradient.</p>
+            <p>Unlike some PPO versions, this process has no entropy bonus and no gradient clipping, and the two networks have separate Adam optimisers. Advantages are normalised over the batch before the policy steps.</p>
+            <div class="code-label"><span>server/rl/ppo.py</span><span>shortened</span></div>
+            <pre><code>def update(model, optimizers, batch, config):
+    pi_optimizer, v_optimizer = optimizers
+    obs, masks = batch["observations"], batch["masks"]
+    actions, old = batch["actions"], batch["log_probs"]
+    adv = batch["advantages"]
+    adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+
+    <span class="c"># Line 6: policy steps, until the policy has moved enough.</span>
+    <span class="c"># 4 shuffled passes in minibatches of 2,048 decisions.</span>
+    for ids in step_schedule(len(adv), config):
+        log_probs = model.pi(obs[ids], masks[ids]).log_prob(actions[ids])
+        loss = clipped_policy_loss(log_probs, old[ids], adv[ids], config.clip)
+        kl = (old[ids] - log_probs).mean().item()      <span class="c"># approx. KL</span>
+        if kl > 1.5 * config.target_kl:                <span class="c"># 1.5 x 0.01</span>
+            break
+        pi_optimizer.zero_grad()
+        loss.backward()
+        pi_optimizer.step()
+
+    <span class="c"># Line 7: fit the value network to the rewards-to-go.</span>
+    for ids in step_schedule(len(adv), config):
+        error = model.v(obs[ids]) - batch["returns"][ids]
+        loss = error.square().mean()
+        v_optimizer.zero_grad()
+        loss.backward()
+        v_optimizer.step()</code></pre>
+          </div>
+        </details>
+      </section>
+
+      <section id="algorithm">
+        <h2>The algorithm on one page</h2>
+        <p class="takeaway">This agent was trained with Spinning Up's PPO-Clip process, line for line. The networks, the game, and how many gradient steps lines 6 and 7 take are what differ.</p>
+        <p>Below is Spinning Up's pseudocode for PPO-Clip. Next to each line is where it happens in this project; select a line to jump to its explanation.</p>
+
+        <ol class="pseudo" aria-label="PPO-Clip pseudocode">
+          <li><span class="line">Input: initial policy parameters <math><semantics><msub><mi>θ</mi><mn>0</mn></msub><annotation encoding="application/x-tex">\theta_0</annotation></semantics></math>, initial value function parameters <math><semantics><msub><mi>ϕ</mi><mn>0</mn></msub><annotation encoding="application/x-tex">\phi_0</annotation></semantics></math></span><a class="where" href="#network">model.py: pi and v</a></li>
+          <li><span class="line"><b>for</b> <math><semantics><mrow><mi>k</mi><mo>=</mo><mn>0</mn><mo separator="true">,</mo><mn>1</mn><mo separator="true">,</mo><mn>2</mn><mo separator="true">,</mo><mo>…</mo></mrow><annotation encoding="application/x-tex">k = 0, 1, 2, \dots</annotation></semantics></math> <b>do</b></span><a class="where" href="#results">one PPO update</a></li>
+          <li class="indent"><span class="line">Collect a set of trajectories <math><semantics><mrow><msub><mi class="mathcal">𝒟</mi><mi>k</mi></msub><mo>=</mo><mo form="prefix" stretchy="false">{</mo><msub><mi>τ</mi><mi>i</mi></msub><mo form="postfix" stretchy="false">}</mo></mrow><annotation encoding="application/x-tex">\mathcal{D}_k = \{\tau_i\}</annotation></semantics></math> by running policy <math><semantics><mrow><msub><mi>π</mi><mi>k</mi></msub><mo>=</mo><mi>π</mi><mo form="prefix" stretchy="false">(</mo><msub><mi>θ</mi><mi>k</mi></msub><mo form="postfix" stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\pi_k = \pi(\theta_k)</annotation></semantics></math> in the environment.</span><a class="where" href="#play">train.py: collect</a></li>
+          <li class="indent"><span class="line">Compute rewards-to-go <math><semantics><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><annotation encoding="application/x-tex">\hat{R}_t</annotation></semantics></math>.</span><a class="where" href="#advantage">ppo.py: rewards_to_go</a></li>
+          <li class="indent"><span class="line">Compute advantage estimates <math><semantics><msub><mover><mi>A</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><annotation encoding="application/x-tex">\hat{A}_t</annotation></semantics></math> based on the current value function <math><semantics><msub><mi>V</mi><msub><mi>ϕ</mi><mi>k</mi></msub></msub><annotation encoding="application/x-tex">V_{\phi_k}</annotation></semantics></math>.</span><a class="where" href="#advantage">ppo.py: compute_gae</a></li>
+          <li class="indent"><span class="line">Update the policy by maximising the PPO-Clip objective, typically by stochastic gradient ascent with Adam:</span><a class="where" href="#clip">ppo.py: update, line 6</a>
+            <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><msub><mi>θ</mi><mrow><mi>k</mi><mo>+</mo><mn>1</mn></mrow></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mrow><mi>arg</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><munder><mi>max</mi><mi>θ</mi></munder><mo>⁡</mo><mspace width="0.1667em"></mspace><mspace width="0.2778em"></mspace><mfrac><mn>1</mn><mrow><mi>|</mi><msub><mi class="mathcal">𝒟</mi><mi>k</mi></msub><mi>|</mi><mspace width="0.1667em"></mspace><mi>T</mi></mrow></mfrac><mrow><munder><mo movablelimits="false">∑</mo><mrow><mi>τ</mi><mo>∈</mo><msub><mi class="mathcal">𝒟</mi><mi>k</mi></msub></mrow></munder></mrow><mrow><munderover><mo movablelimits="false">∑</mo><mrow><mi>t</mi><mo>=</mo><mn>0</mn></mrow><mi>T</mi></munderover></mrow><msub><mi>ℓ</mi><mi>t</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>θ</mi><mo form="postfix" stretchy="false">)</mo></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><mrow><msub><mi>ℓ</mi><mi>t</mi></msub><mo form="prefix" stretchy="false">(</mo><mi>θ</mi><mo form="postfix" stretchy="false">)</mo></mrow></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mrow><mi>min</mi><mo>⁡</mo></mrow><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">(</mo><msub class="v-policy"><mi>ρ</mi><mi>t</mi></msub><mspace width="0.1667em"></mspace><msub class="v-adv"><mi>A</mi><mi>t</mi></msub><mo separator="true">,</mo><mspace width="0.2778em"></mspace><mi>g</mi><mo form="prefix" stretchy="false">(</mo><mi class="v-limit">ϵ</mi><mo separator="true">,</mo><mspace width="0.1667em"></mspace><msub class="v-adv"><mi>A</mi><mi>t</mi></msub><mo form="postfix" stretchy="false">)</mo><mo fence="false" symmetric="true" minsize="1.2em" maxsize="1.2em">)</mo></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><msub class="v-policy"><mi>ρ</mi><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mfrac class="v-policy"><mrow><msub><mi>π</mi><mi>θ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mrow><msub><mi>π</mi><msub><mi>θ</mi><mi>k</mi></msub></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>a</mi><mi>t</mi></msub><mo lspace="0.22em" rspace="0.22em" stretchy="false">|</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mfrac></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><msub class="v-adv"><mi>A</mi><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mrow class="v-adv"><msup><mi>A</mi><msub><mi>π</mi><msub><mi>θ</mi><mi scriptlevel="2">k</mi></msub></msub></msup><mo form="prefix" stretchy="false">(</mo><msub><mi>s</mi><mi>t</mi></msub><mo separator="true">,</mo><msub><mi>a</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} \theta_{k+1} &amp;= \arg\max_{\theta}\; \frac{1}{|\mathcal{D}_k|\, T} \sum_{\tau \in \mathcal{D}_k} \sum_{t=0}^{T} \ell_t(\theta) \\ \ell_t(\theta) &amp;= \min\big(\class{v-policy}{\rho_t}\, \class{v-adv}{A_t},\; g(\class{v-limit}{\epsilon},\, \class{v-adv}{A_t})\big) \\ \class{v-policy}{\rho_t} &amp;= \class{v-policy}{\frac{\pi_\theta(a_t \mid s_t)}{\pi_{\theta_k}(a_t \mid s_t)}} \\ \class{v-adv}{A_t} &amp;= \class{v-adv}{A^{\pi_{\theta_k}}(s_t, a_t)} \end{aligned}</annotation></semantics></math></div>
+          </li>
+          <li class="indent"><span class="line">Fit the value function by regression on mean-squared error, typically by gradient descent:</span><a class="where" href="#update">ppo.py: update, line 7</a>
+            <div class="formula"><math display="block" class="tml-display ms2"><semantics><mtable displaystyle="true" columnalign="right left" class="tml-jot"><mtr><mtd class="tml-right ms3"><msub><mi>ϕ</mi><mrow><mi>k</mi><mo>+</mo><mn>1</mn></mrow></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mrow><mi>arg</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><munder><mi>min</mi><mi>ϕ</mi></munder><mo>⁡</mo><mspace width="0.1667em"></mspace><mspace width="0.2778em"></mspace><mfrac><mn>1</mn><mrow><mi>|</mi><msub><mi class="mathcal">𝒟</mi><mi>k</mi></msub><mi>|</mi><mspace width="0.1667em"></mspace><mi>T</mi></mrow></mfrac><mrow><munder><mo movablelimits="false">∑</mo><mrow><mi>τ</mi><mo>∈</mo><msub><mi class="mathcal">𝒟</mi><mi>k</mi></msub></mrow></munder></mrow><mrow><munderover><mo movablelimits="false">∑</mo><mrow><mi>t</mi><mo>=</mo><mn>0</mn></mrow><mi>T</mi></munderover></mrow><msubsup><mi>e</mi><mi>t</mi><mn>2</mn></msubsup></mrow></mtd></mtr><mtr><mtd class="tml-right ms3"><msub><mi>e</mi><mi>t</mi></msub></mtd><mtd class="tml-left ms3"><mrow><mo>=</mo><mrow class="v-value"><msub><mi>V</mi><mi>ϕ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false" lspace="0em" rspace="0em">)</mo></mrow><mo>−</mo><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned} \phi_{k+1} &amp;= \arg\min_{\phi}\; \frac{1}{|\mathcal{D}_k|\, T} \sum_{\tau \in \mathcal{D}_k} \sum_{t=0}^{T} e_t^{2} \\ e_t &amp;= \class{v-value}{V_\phi(s_t)} - \hat{R}_t \end{aligned}</annotation></semantics></math></div>
+          </li>
+          <li><span class="line"><b>end for</b></span></li>
+        </ol>
+        <p class="source">Pseudocode from <a href="https://spinningup.openai.com/en/latest/algorithms/ppo.html">OpenAI Spinning Up, Proximal Policy Optimization</a> (MIT licence), with its notation; the per-step terms <math><semantics><msub><mi>ℓ</mi><mi>t</mi></msub><annotation encoding="application/x-tex">\ell_t</annotation></semantics></math>, <math><semantics><msub><mi>ρ</mi><mi>t</mi></msub><annotation encoding="application/x-tex">\rho_t</annotation></semantics></math>, <math><semantics><msub><mi>A</mi><mi>t</mi></msub><annotation encoding="application/x-tex">A_t</annotation></semantics></math> and <math><semantics><msub><mi>e</mi><mi>t</mi></msub><annotation encoding="application/x-tex">e_t</annotation></semantics></math> are named here so the formulas fit on a phone.</p>
+
+        <div class="key-eq">
+          <span class="eq-label">Spinning Up's shorter form of the clip</span>
+          <div class="formula"><math display="block" class="tml-display ms2"><semantics><mrow><mi>g</mi><mo form="prefix" stretchy="false">(</mo><mi class="v-limit">ϵ</mi><mo separator="true">,</mo><mi class="v-adv">A</mi><mo form="postfix" stretchy="false">)</mo><mo>=</mo><mrow><mo fence="true" form="prefix">{</mo><mtable><mtr><mtd class="tml-left ms3"><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>+</mo><mi class="v-limit">ϵ</mi><mo form="postfix" stretchy="false">)</mo><mspace width="0.1667em"></mspace><mi class="v-adv">A</mi></mrow></mtd><mtd class="tml-left ms5"><mrow><mi class="v-adv">A</mi><mo>≥</mo><mn>0</mn></mrow></mtd></mtr><mtr><mtd class="tml-left ms3"><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi class="v-limit">ϵ</mi><mo form="postfix" stretchy="false">)</mo><mspace width="0.1667em"></mspace><mi class="v-adv">A</mi></mrow></mtd><mtd class="tml-left ms5"><mrow><mi class="v-adv">A</mi><mo>&lt;</mo><mn>0</mn></mrow></mtd></mtr></mtable><mo fence="true" form="postfix"></mo></mrow></mrow><annotation encoding="application/x-tex">g(\class{v-limit}{\epsilon}, \class{v-adv}{A}) = \begin{cases} (1+\class{v-limit}{\epsilon})\,\class{v-adv}{A} &amp; \class{v-adv}{A} \ge 0 \\ (1-\class{v-limit}{\epsilon})\,\class{v-adv}{A} &amp; \class{v-adv}{A} &lt; 0 \end{cases}</annotation></semantics></math></div>
+          <p class="reading"><math><semantics><mrow><mrow><mi>min</mi><mo>⁡</mo></mrow><mo form="prefix" stretchy="false">(</mo><mi>ρ</mi><mi>A</mi><mo separator="true">,</mo><mtext> </mtext><mi>g</mi><mo form="prefix" stretchy="false">(</mo><mi>ϵ</mi><mo separator="true">,</mo><mi>A</mi><mo form="postfix" stretchy="false">)</mo><mo form="postfix" stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\min(\rho A,\ g(\epsilon, A))</annotation></semantics></math> is the same as <math><semantics><mrow><mrow><mi>min</mi><mo>⁡</mo></mrow><mo form="prefix" stretchy="false">(</mo><mi>ρ</mi><mi>A</mi><mo separator="true">,</mo><mtext> </mtext><mi>clip</mi><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><mi>ρ</mi><mo separator="true">,</mo><mn>1</mn><mo>−</mo><mi>ϵ</mi><mo separator="true">,</mo><mn>1</mn><mo>+</mo><mi>ϵ</mi><mo form="postfix" stretchy="false">)</mo><mi>A</mi><mo form="postfix" stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\min(\rho A,\ \operatorname{clip}(\rho, 1-\epsilon, 1+\epsilon) A)</annotation></semantics></math> from section 7, written without the clip: for a good action the objective is capped at <math><semantics><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>+</mo><mi>ϵ</mi><mo form="postfix" stretchy="false">)</mo><mi>A</mi></mrow><annotation encoding="application/x-tex">(1+\epsilon)A</annotation></semantics></math>, for a bad one at <math><semantics><mrow><mo form="prefix" stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>ϵ</mi><mo form="postfix" stretchy="false">)</mo><mi>A</mi></mrow><annotation encoding="application/x-tex">(1-\epsilon)A</annotation></semantics></math>.</p>
+        </div>
+
+        <h3>Spinning Up and this agent, side by side</h3>
+        <div class="table-wrap">
+          <table class="data compare">
+            <thead><tr><th>Step</th><th>Spinning Up PPO</th><th>This agent</th></tr></thead>
+            <tbody>
+              <tr class="same"><td>Policy objective (line 6)</td><td colspan="2" data-label="Both">The clipped objective with <math><semantics><mrow><mi>ϵ</mi><mo>=</mo><mn>0.2</mn></mrow><annotation encoding="application/x-tex">\epsilon = 0.2</annotation></semantics></math>, maximised with Adam</td></tr>
+              <tr class="same"><td>Early stop</td><td colspan="2" data-label="Both">When <math><semantics><mrow><mi>mean</mi><mo>⁡</mo><mo form="prefix" stretchy="false">(</mo><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><msub><mi>π</mi><mtext>old</mtext></msub><mo>−</mo><mrow><mi>log</mi><mo>⁡</mo><mspace width="0.1667em"></mspace></mrow><mi>π</mi><mo form="postfix" stretchy="false">)</mo><mo>&gt;</mo><mn>1.5</mn><mo>×</mo><mn>0.01</mn></mrow><annotation encoding="application/x-tex">\operatorname{mean}(\log\pi_{\text{old}} - \log\pi) &gt; 1.5 \times 0.01</annotation></semantics></math></td></tr>
+              <tr class="same"><td>Value fit (line 7)</td><td colspan="2" data-label="Both">Adam on <math><semantics><mrow><mo form="prefix" stretchy="false">(</mo><msub><mi>V</mi><mi>ϕ</mi></msub><mo form="prefix" stretchy="false">(</mo><msub><mi>s</mi><mi>t</mi></msub><mo form="postfix" stretchy="false">)</mo><mo>−</mo><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><msup><mo form="postfix" stretchy="false">)</mo><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">(V_\phi(s_t) - \hat{R}_t)^2</annotation></semantics></math>, its own optimiser, learning rate 0.001</td></tr>
+              <tr class="same"><td>Advantages</td><td colspan="2" data-label="Both">GAE with <math><semantics><mrow><mi>γ</mi><mo>=</mo><mn>0.99</mn></mrow><annotation encoding="application/x-tex">\gamma = 0.99</annotation></semantics></math>, <math><semantics><mrow><mi>λ</mi><mo>=</mo><mn>0.97</mn></mrow><annotation encoding="application/x-tex">\lambda = 0.97</annotation></semantics></math>, normalised over the batch</td></tr>
+              <tr class="same"><td>Entropy bonus, gradient clipping</td><td colspan="2" data-label="Both">None</td></tr>
+              <tr><td>Steps per update</td><td data-label="Spinning Up">Up to 80 full-batch policy steps, then 80 full-batch value steps</td><td data-label="This agent">4 passes in minibatches of 2,048: up to 32 policy steps, then 32 value steps. Ten times cheaper here; the first 710 updates used Spinning Up's 80 + 80</td></tr>
+              <tr><td>Policy learning rate</td><td data-label="Spinning Up">0.0003, constant</td><td data-label="This agent">0.0003, falling to 0.00003 over the rest of the run</td></tr>
+              <tr><td>Networks</td><td data-label="Spinning Up">Separate dense networks, two layers of 64</td><td data-label="This agent">Separate convolutional networks: policy 64 channels, value 32 channels, 4 residual blocks each</td></tr>
+              <tr><td>Batch per update</td><td data-label="Spinning Up">4,000 environment steps</td><td data-label="This agent">16,384 learner decisions from 128 parallel games</td></tr>
+              <tr><td>Actions</td><td data-label="Spinning Up">Whatever the environment allows</td><td data-label="This agent">Illegal moves masked out of the softmax</td></tr>
+              <tr><td>Environment</td><td data-label="Spinning Up">One agent in a fixed task</td><td data-label="This agent">A two-player game against a changing mix of opponents, seat alternating</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="results">
+        <h2>What happened in training</h2>
+        <p class="takeaway" id="results-takeaway">The training log of the run that produced the Hard agent.</p>
+        <div class="insights" id="insights"></div>
+        <figure class="widget" id="curves-widget">
+          <div class="widget-head"><h3>Win rate during training</h3><span>Hover the charts</span></div>
+          <svg class="chart" id="curve-wins" viewBox="0 0 640 260" role="img" aria-label="Win rate against each opponent type across training"></svg>
+          <div class="legend" id="curve-legend"></div>
+          <div class="widget-head curve-gap"><h3>Entropy and value error</h3></div>
+          <svg class="chart" id="curve-loss" viewBox="0 0 640 200" role="img" aria-label="Policy entropy, value loss and policy steps across training"></svg>
+          <div class="legend" id="loss-legend"></div>
+          <div class="snapshot" id="curve-snapshot" aria-live="polite"></div>
+          <figcaption id="curves-caption">Averages over blocks of updates, measured during training while the agent samples its moves. Against its own recent snapshots it never reaches 100%: those opponents improve with it.</figcaption>
+        </figure>
+        <p class="note value" id="value-refit"><b>The value network failed at update 550.</b> In that update's fit, the four channels at the top of its value head stopped responding to every position. A ReLU that outputs 0 everywhere passes back no gradient, so they never recovered, and from then on the network predicted 0.51 for every position: the value error above jumps at update 550 and stays up. The policy kept improving, because the advantages still credited moves in won games and blamed moves in lost ones, just less precisely. After training, a fresh value network was fit on about 102,000 games played by the frozen final policy, which is line 7 of the pseudocode on its own. That refit network is the one in this page's figures.</p>
+        <figure class="widget" id="eval-widget">
+          <div class="widget-head"><h3>Final evaluation: 400 games against each program</h3></div>
+          <div class="eval" id="eval"></div>
+          <figcaption>Half the games with the agent moving first. These programs look at most one turn ahead, so these are not ratings against people.</figcaption>
+        </figure>
+      </section>
+
+      <section id="details">
+        <h2>Details that made it work</h2>
+        <div class="cards">
+          <div class="card policy"><b>Masking, not punishing</b><p>Illegal moves get probability exactly 0, so no games are wasted learning the rules. The stored mask is reused in the update, so ratios compare like with like.</p></div>
+          <div class="card value"><b>One point of view</b><p>Inputs are always "mine" and "theirs", so what it learns playing first carries over to playing second.</p></div>
+          <div class="card policy"><b>Careful starting weights</b><p>The policy head starts tiny, so the first policy is nearly uniform over legal moves, and each residual block starts as the identity.</p></div>
+          <div class="card limit"><b>Two brakes</b><p>The clip removes the reason to move a probability more than 20%, and the KL early stop ends the policy steps once the policy as a whole has moved far enough.</p></div>
+          <div class="card advantage"><b>A changing opponent pool</b><p>A snapshot every 10 updates, the 10 latest kept, plus fixed programs and earlier agents.</p></div>
+          <div class="card value"><b>Separate networks</b><p>Because the policy and value networks share nothing, fitting the value network can never disturb the policy after its KL check, which is why Spinning Up keeps them apart.</p></div>
+          <div class="card limit"><b>At play time only: symmetry</b><p>The board looks the same in its eight rotations and reflections, but the network does not know that. Each game the site shows it a random orientation, so its openings vary without changing its strength.</p></div>
+        </div>
+      </section>
+
+      <section id="glossary" class="unnumbered">
+        <h2>Glossary and reading</h2>
+        <dl class="glossary">
+          <dt>Actor</dt><dd>The policy network <math><semantics><msub><mi>π</mi><mi>θ</mi></msub><annotation encoding="application/x-tex">\pi_\theta</annotation></semantics></math>, which chooses moves.</dd>
+          <dt>Advantage</dt><dd>How much better a decision turned out than the value network expected.</dd>
+          <dt>Batch</dt><dd>All the decisions collected for one update: 16,384 here.</dd>
+          <dt>Critic</dt><dd>The value network <math><semantics><msub><mi>V</mi><mi>ϕ</mi></msub><annotation encoding="application/x-tex">V_\phi</annotation></semantics></math>, which estimates how good a position is.</dd>
+          <dt>Discount <math><semantics><mi>γ</mi><annotation encoding="application/x-tex">\gamma</annotation></semantics></math></dt><dd>How much a reward one decision later is worth compared with one now.</dd>
+          <dt>Entropy</dt><dd>How spread out the policy's probabilities are.</dd>
+          <dt>GAE <math><semantics><mi>λ</mi><annotation encoding="application/x-tex">\lambda</annotation></semantics></math></dt><dd>How far ahead advantages look, trading noise against reliance on the value network.</dd>
+          <dt>KL divergence</dt><dd>A measure of how different two probability distributions are; here only a brake.</dd>
+          <dt>Rewards-to-go</dt><dd><math><semantics><msub><mover><mi>R</mi><mo stretchy="false" class="tml-capshift ms1">^</mo></mover><mi>t</mi></msub><annotation encoding="application/x-tex">\hat{R}_t</annotation></semantics></math>: the discounted rewards from a decision to the end of the game, the value network's target.</dd>
+          <dt>Logit</dt><dd>A raw score before softmax turns scores into probabilities.</dd>
+          <dt>Snapshot</dt><dd>A frozen copy of the agent, kept as an opponent.</dd>
+        </dl>
+        <h3>Further reading</h3>
+        <ul>
+          <li>Schulman et al., <a href="https://arxiv.org/abs/1707.06347">Proximal Policy Optimization Algorithms</a> (2017): the PPO paper, with both PPO-Clip and PPO-Penalty.</li>
+          <li>Schulman et al., <a href="https://arxiv.org/abs/1506.02438">High-Dimensional Continuous Control Using Generalized Advantage Estimation</a> (2016): GAE.</li>
+          <li>OpenAI Spinning Up, <a href="https://spinningup.openai.com/en/latest/algorithms/ppo.html">Proximal Policy Optimization</a>: the pseudocode and process this agent follows.</li>
+          <li>Sutton and Barto, <a href="http://incompleteideas.net/book/the-book-2nd.html">Reinforcement Learning: An Introduction</a>: the standard textbook, free online.</li>
+          <li>He et al., <a href="https://arxiv.org/abs/1512.03385">Deep Residual Learning for Image Recognition</a> (2016): residual blocks.</li>
+        </ul>
+        <p>The training code is in <code>server/rl/</code>; the network running in your browser is <code>web/policy.js</code>.</p>
+        <p class="footer">Santorini was designed by Gordon Hamilton. This is an unofficial fan project. <a href="./">Back to the game</a>.</p>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="static/learn.js"></script>
+</body>
+</html>

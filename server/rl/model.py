@@ -95,6 +95,60 @@ class ConvActorCritic(nn.Module):
         return masked_distribution(logits, masks), self.value(features).squeeze(-1)
 
 
+def residual_trunk(channels: int, blocks: int) -> tuple[nn.Module, nn.Module]:
+    """The 3x3 stem and residual tower over the 15 input planes."""
+    stem = nn.Sequential(nn.Conv2d(ConvActorCritic.PLANES, channels, 3, padding=1), nn.ReLU())
+    return stem, nn.Sequential(*(ResidualBlock(channels) for _ in range(blocks)))
+
+
+class ConvPolicy(nn.Module):
+    """The policy network pi_theta: a residual trunk and the three-plane policy head."""
+
+    def __init__(self, channels: int = 64, blocks: int = 4) -> None:
+        super().__init__()
+        self.stem, self.tower = residual_trunk(channels, blocks)
+        self.policy = nn.Conv2d(channels, 3, 1)
+        nn.init.normal_(self.policy.weight, std=0.01)
+        nn.init.zeros_(self.policy.bias)
+
+    def forward(self, observations: torch.Tensor, masks: torch.Tensor) -> Categorical:
+        features = self.tower(self.stem(ConvActorCritic.planes(observations)))
+        return masked_distribution(self.policy(features).flatten(1), masks)
+
+
+class ConvValue(nn.Module):
+    """The value network V_phi: its own residual trunk and the value head."""
+
+    def __init__(self, channels: int = 32, blocks: int = 4) -> None:
+        super().__init__()
+        self.stem, self.tower = residual_trunk(channels, blocks)
+        self.value = nn.Sequential(nn.Conv2d(channels, 4, 1), nn.ReLU(), nn.Flatten(),
+                                   nn.Linear(100, 128), nn.ReLU(), nn.Linear(128, 1))
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        return self.value(self.tower(self.stem(ConvActorCritic.planes(observations)))).squeeze(-1)
+
+
+class SeparateActorCritic(nn.Module):
+    """Separate policy (`pi`, parameters theta) and value (`v`, parameters phi) networks, as in
+    Spinning Up's actor-critic, so each can be trained by its own step of the PPO-Clip pseudocode."""
+
+    architecture = "separate"
+
+    def __init__(self, channels: int = 64, blocks: int = 4, value_channels: int = 32, value_blocks: int = 4) -> None:
+        super().__init__()
+        self.sizes = {"channels": channels, "blocks": blocks, "value_channels": value_channels, "value_blocks": value_blocks}
+        self.pi = ConvPolicy(channels, blocks)
+        self.v = ConvValue(value_channels, value_blocks)
+
+    @property
+    def spec(self) -> dict:
+        return {"architecture": "separate", **self.sizes}
+
+    def forward(self, observations: torch.Tensor, masks: torch.Tensor) -> tuple[Categorical, torch.Tensor]:
+        return self.pi(observations, masks), self.v(observations)
+
+
 def create_model(spec: dict | None = None) -> nn.Module:
     spec = dict(spec or {"architecture": "mlp"})
     architecture = spec.pop("architecture", "mlp")
@@ -102,14 +156,17 @@ def create_model(spec: dict | None = None) -> nn.Module:
         return ActorCritic(**spec)
     if architecture == "conv":
         return ConvActorCritic(**spec)
+    if architecture == "separate":
+        return SeparateActorCritic(**spec)
     raise ValueError(f"Unknown model architecture: {architecture}")
 
 
 def checkpoint_spec(checkpoint: dict) -> dict:
-    """Format 1 stored only the MLP hidden width; format 2 stores a full model spec."""
+    """Format 1 stored only the MLP hidden width; formats 2 and 3 store a full model spec
+    (format 3 holds separate policy and value optimizers)."""
     if checkpoint.get("format_version") == 1:
         return {"architecture": "mlp", "hidden": checkpoint["hidden"]}
-    if checkpoint.get("format_version") == 2:
+    if checkpoint.get("format_version") in (2, 3):
         return dict(checkpoint["model_spec"])
     raise ValueError("Unsupported agent checkpoint.")
 

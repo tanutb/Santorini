@@ -2,6 +2,9 @@ import { demoGame } from './board.js';
 import { createBoard } from './board-factory.js';
 import { Feedback } from './feedback.js';
 import { NEIGHBORS, analyze, coordinate, describeTransition } from './coach.js';
+import { AgentClient } from './agent-client.js';
+import { LocalRoom } from './local-game.js';
+import { API_KEY, SERVER_URL } from './config.js';
 
 const $ = id => document.getElementById(id);
 const feedback = new Feedback();
@@ -11,13 +14,23 @@ const storage = {
   remove(key) { try { localStorage.removeItem(key); } catch { /* Storage can be disabled. */ } },
 };
 const MODE_LABEL = { ai: 'Against the agent', online: 'Online game', local: 'Pass and play' };
+const START_LABEL = { ai: 'Play the agent', online: 'Create a room', local: 'Start the game' };
 const COLOR = ['Coral', 'Gold'];
+// Players choose a difficulty; the manifest's names describe training history and stay in the About dialog.
+const LEVEL_LABEL = { early: 'Easy', developing: 'Medium', full: 'Hard' };
+const LEVEL_ROLE = { early: 'Beginner', developing: 'Intermediate', full: 'Expert' };
+const ONLINE_NOTE = 'Send them a room code';
+const coarse = matchMedia('(pointer: coarse)');
 
 let room = null, token = '', mode = 'ai', selectedWorker = -1, pending = false, hover = -1;
 let socket = null, reconnectTimer = null, heartbeat = null, polling = null, retry = 0;
 let toastTimer = 0, noticeTimer = 0, feedbackTimer = 0, confirmResolve = null;
 let hint = null, hintPending = false, lastHistoryKey = '';
 let levels = [], level = null;
+// Agent and pass-and-play games run in this browser; only online games use the game server.
+let local = null, serverOnline = null, serverWaking = false;
+const agent = new AgentClient();
+const server = SERVER_URL === null ? null : SERVER_URL.replace(/\/+$/, '');
 
 const board = createBoard($('board'), {
   onPick: pickCell,
@@ -51,9 +64,10 @@ async function api(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
   try {
-    const response = await fetch('/api' + path, {
+    const response = await fetch(server + '/api' + path, {
       ...options, signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...options.headers },
+      headers: { 'Content-Type': 'application/json', ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),
+        ...(token ? { Authorization: 'Bearer ' + token } : {}), ...options.headers },
     });
     const body = await response.json();
     if (!response.ok) {
@@ -63,7 +77,7 @@ async function api(path, options = {}) {
     }
     return body;
   } catch (error) {
-    if (error.name === 'AbortError' || error instanceof TypeError) throw new Error('Cannot reach the game server. Check your connection and try again.');
+    if (error.name === 'AbortError' || error instanceof TypeError) throw new Error('Cannot reach the game server for online play. Check your connection and try again.');
     throw error;
   } finally { clearTimeout(timeout); }
 }
@@ -144,7 +158,8 @@ function acceptRoom(next) {
     selectedWorker = -1;
     hint = null;
     $('hint-result').hidden = true;
-    showActionFeedback(describeTransition(before, next.game, next.players.map((_, i) => room.mode === 'local' ? next.players[i] : (i === room.seat ? 'You' : next.players[i]))), before.current);
+    const change = describeTransition(before, next.game, next.players);
+    if (change && change.kind !== 'win') feedback.play(change.kind);
     if (next.game.winner === null && next.mode !== 'local' && next.game.current === room.seat && before.current !== room.seat) feedback.play('turn');
     if (next.game.winner !== null && before.winner === null) feedback.play(next.mode === 'local' || next.game.winner === room.seat ? 'win' : 'lose');
   }
@@ -165,10 +180,13 @@ function render() {
   const game = room.game;
   $('room-mode').textContent = MODE_LABEL[room.mode];
   $('active-code').textContent = room.code;
+  $('room-code-box').hidden = Boolean(local);
+  $('connection-status').hidden = Boolean(local);
   $('copy-button').hidden = room.mode !== 'online';
-  $('room-help').textContent = room.mode === 'online'
-    ? (room.ready ? 'Your seat is saved in this browser. Refreshing reconnects you.' : 'Send the room code or copy the invitation link. The game starts when your friend joins.')
-    : 'Saved automatically. Return in this browser to continue.';
+  $('room-help').textContent = local
+    ? (room.mode === 'ai' ? levelLabel(room.level) + ' difficulty. ' : '') + 'Saved on this device, so a refresh picks up where you left off.'
+    : room.ready ? 'Your seat is saved in this browser. Refreshing reconnects you.' : 'Send the room code or copy the invitation link. The game starts when your friend joins.';
+  $('replay-button').disabled = !room.history.length;
   renderPlayers();
   renderStatus();
   renderCoach();
@@ -182,47 +200,101 @@ function render() {
 function renderLobby() {
   board.setState(demoGame(), { targets: [] });
   renderStrength();
-  for (const i of [0, 1]) $('player-' + i).classList.remove('is-active');
-  $('player-name-0').textContent = $('player-name').value.trim() || 'You';
-  $('player-name-1').textContent = { ai: 'PPO agent', online: 'Your friend', local: 'Second player' }[mode];
-  $('player-state-0').textContent = 'Coral workers, moves first';
-  $('player-state-1').textContent = 'Gold workers';
-  setStatus('Choose how to play', 'Pick an opponent in the panel. Drag to turn the island.', -1);
-  setPhase(null);
+  // No server configured (static site) and an unreachable server read differently; both keep the agent playable.
+  const waking = serverWaking && server !== null, offline = serverOnline === false && !waking;
+  const online = document.querySelector('[data-mode=online]');
+  // Without a server the option is unavailable; a waking or unreachable server stays selectable.
+  online.setAttribute('aria-disabled', String(offline && server === null));
+  const state = waking ? 'waking' : offline && server !== null ? 'unreachable' : '';
+  if (state) online.dataset.state = state; else delete online.dataset.state;
+  online.querySelector('.mode-note').textContent = waking ? 'Waking up the game server, about a minute'
+    : !offline ? ONLINE_NOTE : server === null ? 'Needs a game server, which this site does not have' : 'The game server is not responding. Select to try again';
+  $('join-form').hidden = offline || waking || mode !== 'online';
+  // Agent games need no names; online games show yours to your friend; pass and play names both seats.
+  $('names').hidden = mode === 'ai';
+  $('second-name-field').hidden = mode !== 'local';
+  $('player-name-label').textContent = mode === 'local' ? 'Coral player' : 'Your name';
+  $('player-name').placeholder = mode === 'local' ? 'Coral player' : 'Shown to your friend';
+  $('start-button').textContent = START_LABEL[mode];
+  $('replay-button').disabled = true;
   $('result-card').hidden = true;
   renderGrid({ targets: [], selected: -1 });
 }
 
-const levelName = id => levels.find(entry => entry.id === id)?.name || 'Full strength';
+const levelLabel = id => LEVEL_LABEL[id] || levels.find(entry => entry.id === id)?.name || 'Hard';
 
-/** Earlier checkpoints of the training run, described by what they were measured to do. */
+/** A three-level tower with the difficulty's levels built and the rest drawn faintly. */
+function towerGlyph(storeys) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 36 36');
+  svg.setAttribute('aria-hidden', 'true');
+  for (let level = 0; level < 3; level++) {
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    const width = 24 - level * 5;
+    Object.entries({ x: 18 - width / 2, y: 25 - level * 9, width, height: 8, rx: 1.2 }).forEach(([key, value]) => rect.setAttribute(key, value));
+    if (level >= storeys) rect.setAttribute('class', 'unbuilt');
+    svg.append(rect);
+  }
+  const ground = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  ground.setAttribute('d', 'M4 33.5h28');
+  svg.append(ground);
+  return svg;
+}
+
+/** Earlier checkpoints of the training run, offered as difficulty levels. */
 function renderStrength() {
   const options = levels.filter(entry => entry.available);
   $('strength').hidden = mode !== 'ai' || options.length < 2;
   if ($('strength').hidden) return;
   const container = $('strength-options');
   if (container.children.length !== options.length) {
-    container.replaceChildren(...options.map(entry => {
-      const button = document.createElement('button');
+    container.replaceChildren(...options.map((entry, index) => {
+      const button = document.createElement('button'), label = document.createElement('span');
       button.type = 'button';
+      button.className = 'level';
       button.setAttribute('role', 'radio');
       button.dataset.level = entry.id;
-      button.textContent = entry.name;
+      label.textContent = levelLabel(entry.id);
+      button.append(towerGlyph(Math.min(3, index + 1)), label, Object.assign(document.createElement('small'), { textContent: LEVEL_ROLE[entry.id] || '' }));
       button.addEventListener('click', () => { level = entry.id; storage.set('santorini.level', level); renderStrength(); });
       return button;
     }));
   }
-  for (const button of container.children) button.setAttribute('aria-checked', String(button.dataset.level === level));
+  for (const button of container.children) {
+    const checked = button.dataset.level === level;
+    button.setAttribute('aria-checked', String(checked));
+    button.tabIndex = checked ? 0 : -1;
+  }
   const chosen = options.find(entry => entry.id === level);
-  const rate = chosen?.win_rates?.lookahead;
-  $('strength-note').textContent = chosen
-    ? 'Trained on ' + Math.round(chosen.steps / 1e5) / 10 + ' million decisions' + (rate === undefined ? '.' : '. Beats the one-move lookahead player in ' + Math.round(rate * 100) + '% of games.')
-    : '';
+  $('strength-note').textContent = chosen ? levelNote(chosen) : '';
 }
 
+/** How hard a level is, in words a player can use, from its measured results. */
+function levelNote(entry) {
+  const pct = value => Math.round(value * 100) + '%';
+  const bot = entry.win_rates?.lookahead, hard = levels.find(level => level.id === 'full');
+  const sentences = [];
+  if (entry.id === 'early') {
+    sentences.push('For learning the rules: it misses threats you can punish.');
+    if (bot !== undefined) sentences.push(`It wins only ${pct(bot)} of games against a simple bot that looks one move ahead.`);
+  } else if (entry.id === 'developing') {
+    sentences.push('A real test: it rarely misses an immediate threat.');
+    if (bot !== undefined) sentences.push(`It beats the one-move bot ${pct(bot)} of the time${hard?.versus?.developing !== undefined ? `, but Hard wins ${pct(hard.versus.developing)} of games against it` : ''}.`);
+  } else {
+    sentences.push(`The strongest agent, with ${Math.round(entry.steps / 1e5) / 10} million decisions of practice.`);
+    const medium = entry.versus?.developing;
+    if (bot !== undefined) sentences.push(`It beats the one-move bot ${pct(bot)} of the time${medium !== undefined ? ` and Medium ${pct(medium)} of the time` : ''}.`);
+  }
+  return sentences.join(' ');
+}
+
+/** Strengths and results ship with the exported networks (web/models/manifest.json). */
 async function loadLevels() {
   try {
-    levels = (await api('/agent')).levels || [];
+    const manifest = await agent.manifest();
+    levels = manifest.levels.map(entry => ({ id: entry.id, name: entry.name, available: true, default: entry.id === manifest.default,
+      steps: entry.metadata.steps, versus: entry.versus || {},
+      win_rates: Object.fromEntries(Object.entries(entry.evaluation || {}).map(([name, result]) => [name, result.win_rate])) }));
     const saved = storage.get('santorini.level');
     const available = levels.filter(entry => entry.available);
     level = available.some(entry => entry.id === saved) ? saved : (available.find(entry => entry.default) || available.at(-1))?.id ?? null;
@@ -230,129 +302,138 @@ async function loadLevels() {
   if (!room) renderStrength();
 }
 
+/** How a player appears in the turn strip and the move list. */
+function displayName(player) {
+  if (room.mode === 'ai') return player === 0 ? 'You' : 'Agent';
+  if (room.mode === 'online' && player === room.seat) return 'You';
+  return room.players[player] || (room.mode === 'online' ? 'Your friend' : COLOR[player] + ' player');
+}
+
 function renderPlayers() {
   const game = room.game;
   for (const i of [0, 1]) {
-    let state = COLOR[i] + ' workers';
+    const active = game.winner === null && room.ready && game.current === i;
+    let state = COLOR[i];
     if (!room.players[i]) state = 'Waiting to join';
-    else if (game.winner !== null) state = game.winner === i ? 'Winner' : COLOR[i] + ' workers';
-    else if (room.mode === 'online' && !room.connected[i]) state = 'Disconnected; their seat is saved';
-    else if (room.ready && game.current === i) state = room.mode === 'ai' && i === 1 ? 'Thinking' : game.phase === 'place' ? 'Placing workers' : 'To move';
-    else if (room.mode === 'ai' && i === 1 && room.level) state = COLOR[1] + ' workers, ' + levelName(room.level).toLowerCase();
-    $('player-name-' + i).textContent = room.players[i] ? (room.mode !== 'local' && i === room.seat ? room.players[i] + ' (you)' : room.players[i]) : 'Open seat';
+    else if (game.winner !== null) state = game.winner === i ? 'Winner' : COLOR[i];
+    else if (room.mode === 'online' && !room.connected[i]) state = 'Disconnected, seat saved';
+    else if (active && room.mode === 'ai' && i === 1) state = room.ai_error ? 'Stopped' : game.phase === 'place' ? 'Placing workers' : 'Thinking…';
+    else if (active) state = game.phase === 'place' ? 'Placing workers' : isMine(i) && room.mode !== 'local' ? 'Your turn' : 'To play';
+    else if (room.mode === 'ai' && i === 1 && room.level) state = levelLabel(room.level);
+    $('player-name-' + i).textContent = room.players[i] ? displayName(i) : 'Open seat';
     $('player-state-' + i).textContent = state;
-    $('player-' + i).classList.toggle('is-active', game.winner === null && room.ready && game.current === i);
+    $('player-' + i).classList.toggle('is-active', active || game.winner === i);
+    $('player-' + i).classList.toggle('thinking', active && room.mode === 'ai' && i === 1 && !room.ai_error);
   }
 }
 
-function setStatus(title, description, player, thinking = false, win = false) {
+function setStatus(title, description = '') {
   $('turn-title').textContent = title;
   $('turn-description').textContent = description;
-  const piece = $('status-piece');
-  if (player >= 0) piece.dataset.player = player; else delete piece.dataset.player;
-  piece.classList.toggle('thinking', thinking);
-  $('status-card').classList.toggle('win', win);
 }
 
-function setPhase(phase) {
-  const order = ['place', 'move', 'build'];
-  for (const step of $('phase-steps').children) {
-    const index = order.indexOf(step.dataset.phase), current = order.indexOf(phase);
-    step.classList.toggle('active', index === current);
-    step.classList.toggle('done', phase !== null && (phase === 'place' ? false : index === 0 || (phase === 'build' && index === 1)));
-    if (index === current) step.setAttribute('aria-current', 'step'); else step.removeAttribute('aria-current');
+/** Consecutive history entries by one player: a pair of placements, or a move and its build. */
+function turnsOf(history) {
+  const turns = [];
+  for (const entry of history) {
+    const last = turns.at(-1);
+    if (last && last.player === entry.player) last.entries.push(entry); else turns.push({ player: entry.player, entries: [entry] });
   }
-  $('phase-steps').hidden = phase === null;
+  return turns;
+}
+
+function summarize(entries) {
+  const placed = entries.map(entry => /^Placed worker \d on ([A-E][1-5])$/.exec(entry.text));
+  if (placed.every(Boolean)) return placed.length === 1 ? 'placed a worker on ' + placed[0][1] : 'placed workers on ' + placed.map(match => match[1]).join(' and ');
+  return entries.map(entry => entry.text.charAt(0).toLowerCase() + entry.text.slice(1)).join(', then ');
+}
+
+/** What the other player did last, so nobody has to read the move list to catch up. */
+function lastTurnText() {
+  const previous = turnsOf(room.history).reverse().find(turn => turn.player !== room.game.current);
+  if (!previous) return '';
+  const text = displayName(previous.player) + ' ' + summarize(previous.entries) + '.';
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function renderStatus() {
-  const game = room.game, current = game.current, name = nameOf(current);
-  const owner = room.mode === 'local' ? room.players[current] + ': ' : '';
+  const game = room.game, current = game.current;
   $('result-card').hidden = game.winner === null;
   if (!room.ready) {
-    setStatus('Waiting for your friend', 'Share room code ' + room.code + '. The game starts when they join.', 0);
-    setPhase(null);
+    setStatus('Waiting for your friend', 'Share room code ' + room.code + '. The game starts when they join.');
     return;
   }
   if (game.winner !== null) {
-    const winner = nameOf(game.winner);
-    const title = room.mode === 'local' ? winner + ' wins' : game.winner === room.seat ? 'You win' : winner + ' wins';
-    const detail = game.reason === 'Opponent resigned' ? nameOf(1 - game.winner) + ' resigned.' : game.reason + '.';
-    setStatus(title, detail, game.winner, false, true);
-    setPhase(null);
+    const title = displayName(game.winner) === 'You' ? 'You win' : displayName(game.winner) + ' wins';
+    const detail = game.reason === 'Opponent resigned' ? displayName(1 - game.winner) + ' resigned.' : game.reason + '.';
+    setStatus(title, detail);
     $('result-title').textContent = title;
     $('result-detail').textContent = detail + (room.rematch.length && !room.rematch.includes(room.seat) ? ' Your opponent wants a rematch.' : '');
     $('result-rematch').disabled = pending || room.rematch.includes(room.seat);
     $('result-rematch').textContent = room.rematch.includes(room.seat) ? 'Waiting for your friend' : 'Play again';
     return;
   }
-  setPhase(game.phase);
-  if (room.ai_error) { setStatus('The agent needs attention', room.ai_error, 1); return; }
+  if (room.ai_error) { setStatus('The agent needs attention', room.ai_error); return; }
+  const last = lastTurnText();
   if (!isMine(current)) {
-    const thinking = room.mode === 'ai';
-    setStatus(thinking ? 'The agent is thinking' : name + '’s turn', thinking ? 'Its move and build will animate on the island.' : 'Their move will appear here as soon as they make it.', current, thinking);
+    if (room.mode === 'ai') setStatus(game.phase === 'place' ? 'The agent is placing its workers' : 'The agent is thinking', last);
+    else setStatus('Waiting for ' + displayName(current), last || 'Their move appears here as soon as they make it.');
     return;
   }
-  if (pending) { setStatus('Sending your move', 'One moment.', current); return; }
+  if (pending) { setStatus('Sending your move…', last); return; }
+  const who = room.mode === 'local' ? displayName(current) + ', ' : '';
+  const say = text => who ? who + text.charAt(0).toLowerCase() + text.slice(1) : text;
   if (game.phase === 'place') {
     const count = game.workers[current].filter(cell => cell >= 0).length;
-    setStatus(owner + (count ? 'Place your second worker' : 'Place your first worker'), 'Pick any empty square. Central squares leave more room to move.', current);
+    setStatus(say(count ? 'Place your second worker' : 'Place your first worker'), last || 'Any empty square. Central squares leave more room to move.');
   } else if (game.phase === 'move') {
-    if (activeWorker() < 0) setStatus(owner + 'Choose a worker to move', 'Rings mark the workers that can move.', current);
-    else setStatus(owner + 'Move to a teal square', 'Climb up one level, or step down any number.', current);
+    const wins = coached() ? alerts().wins : [];
+    if (wins.length) setStatus(say('You can win this move'), 'Step up onto ' + wins.map(coordinate).join(' or ') + '.');
+    else if (activeWorker() < 0) setStatus(say('Choose a worker to move'), last);
+    else setStatus(say('Move to a highlighted square'), last || 'Climb up one level, or step down any number.');
   } else {
-    setStatus(owner + 'Build next to your worker', 'Add a level, or cap a third level with a dome.', current);
+    setStatus(say('Build next to your worker'), 'Add a level, or cap a third level with a dome.');
   }
 }
 
 function renderCoach() {
   if (!coached()) return;
-  const game = room.game, insight = room.insight;
-  // Scored at the start of each turn; it stays until the next turn begins.
-  const showInsight = insight && insight.revision >= game.revision - 1 && room.ready && game.phase !== 'place' && game.winner === null;
-  $('insight').hidden = !showInsight;
-  if (showInsight) {
-    // Only clear leads are called: in calibration, mid-range estimates were too noisy to quote as numbers.
-    const names = room.mode === 'ai' ? ['You', 'The agent'] : room.players;
-    const lead = insight.p0 >= .75 ? 0 : insight.p0 <= .25 ? 1 : -1;
-    $('insight-value').textContent = lead < 0 ? 'Roughly even' : names[lead] + (lead === 0 && room.mode === 'ai' ? ' are ahead' : ' is ahead');
-    $('insight-note').textContent = 'From the agent’s value network, calibrated on its own games. It only calls clear leads.';
-  }
+  const game = room.game;
   const list = $('alerts');
   list.replaceChildren();
-  if (!room.ready || game.winner !== null) return;
+  const playing = room.ready && game.winner === null;
+  $('hint-button').disabled = !playing || !canAct() || hintPending;
+  $('hint-button').querySelector('span').textContent = hintPending ? 'Asking the agent…' : 'Suggest a move';
+  if (!playing) return;
+  // Only real, rule-derived warnings: no filler tips.
   const { wins, threats, risky } = alerts(), mover = game.current;
   const cells = values => values.map(coordinate).join(', ');
   const add = (text, kind) => { const li = document.createElement('li'); li.textContent = text; if (kind) li.className = kind; list.append(li); };
-  const you = room.mode === 'local' ? room.players[mover] : 'You', rival = nameOf(1 - mover);
+  const you = room.mode === 'local' ? displayName(mover) : 'You', rival = displayName(1 - mover);
   if (wins.length) add(you + ' can win now by stepping onto ' + cells(wins) + '.', 'win');
   if (threats.length) add(rival + ' could win next turn on ' + cells(threats) + '. A dome there blocks it.');
   if (risky.length) add('Building on ' + cells(risky) + ' would give ' + rival + ' a winning step.');
-  if (!list.children.length && canAct()) {
-    add(game.phase === 'place' ? 'Workers near the centre have more squares to move and build on.'
-      : game.phase === 'move' ? 'A worker on level two next to a level-three tower threatens to win.'
-        : 'Domes close a square for good. Use them to cut off a climb.', 'tip');
-  }
-  $('hint-button').disabled = !canAct() || hintPending || !room.ready;
-  $('hint-button').querySelector('span').textContent = hintPending ? 'Asking the agent…' : 'Suggest a move';
-  $('replay-button').disabled = !room.history.length;
 }
 
 function renderJournal() {
-  const game = room.game;
-  $('history-count').textContent = room.history.length ? room.history.length + (room.history.length === 1 ? ' action' : ' actions') : '';
-  const key = room.code + ':' + game.revision + ':' + room.history.length;
+  const game = room.game, turns = turnsOf(room.history);
+  $('history-count').textContent = turns.length ? turns.length + (turns.length === 1 ? ' turn' : ' turns') : '';
+  const key = room.code + ':' + game.revision + ':' + room.history.length + ':' + room.mode;
   if (key !== lastHistoryKey) {
     lastHistoryKey = key;
     const list = $('history-list');
     list.replaceChildren();
-    for (const entry of room.history.slice(-40).reverse()) {
-      const li = document.createElement('li');
-      li.textContent = (room.mode === 'local' ? room.players[entry.player] : nameOf(entry.player)) + ': ' + entry.text.charAt(0).toLowerCase() + entry.text.slice(1);
-      li.className = 'p' + entry.player;
-      list.append(li);
-    }
-    if (!room.history.length) {
+    turns.forEach((turn, index) => {
+      const li = document.createElement('li'), number = document.createElement('span'), line = document.createElement('span'), who = document.createElement('b');
+      number.className = 'turn-no';
+      number.textContent = index + 1;
+      who.textContent = displayName(turn.player);
+      line.append(who, ' ' + summarize(turn.entries));
+      li.className = 'p' + turn.player;
+      li.append(number, line);
+      list.prepend(li);
+    });
+    if (!turns.length) {
       const li = document.createElement('li');
       li.className = 'empty';
       li.textContent = 'No moves yet. Coral places first.';
@@ -388,8 +469,8 @@ function renderGrid(decor) {
 function describeHover() {
   const label = $('hover-label');
   if (hover < 0) {
-    label.textContent = matchMedia('(pointer: coarse)').matches ? 'Swipe sideways to turn the island.'
-      : room ? 'Drag to turn the island. Ctrl + scroll zooms.' : 'Drag to turn the island.';
+    // Until the first action, remind new players that the island turns.
+    label.textContent = room && room.history.length ? '' : coarse.matches ? 'Swipe sideways to turn the island' : 'Drag to turn the island';
     return;
   }
   const game = room ? room.game : demoGame(), height = game.heights[hover];
@@ -407,17 +488,6 @@ function describeHover() {
   label.textContent = text;
 }
 
-function showActionFeedback(change, player) {
-  if (!change) return;
-  feedback.play(change.kind === 'win' ? 'select' : change.kind);
-  clearTimeout(feedbackTimer);
-  $('action-title').textContent = change.title;
-  $('action-detail').textContent = change.detail;
-  $('action-icon').dataset.player = player;
-  $('action-feedback').hidden = change.kind === 'win';
-  feedbackTimer = setTimeout(() => { $('action-feedback').hidden = true; }, 3200);
-}
-
 // ------------------------------------------------------------------ actions
 
 async function pickCell(cell) {
@@ -425,6 +495,7 @@ async function pickCell(cell) {
   if (!room) { showNotice('Start a game to play'); return; }
   if (room.game.winner !== null) { showNotice('This game is over'); return; }
   if (!canAct()) {
+    if (local && room.ai_error) { local.retry(); return; }
     if (!pending) showNotice(room.ready ? (room.mode === 'ai' ? 'The agent is still playing' : 'Wait for your turn') : 'Waiting for your friend to join');
     return;
   }
@@ -449,6 +520,10 @@ async function pickCell(cell) {
     action = 25 + worker * 25 + cell;
   }
   if (!room.legal.includes(action)) { toast(whyNot(cell), true); return; }
+  if (local) {
+    try { acceptRoom(local.act(action, game.revision)); } catch (error) { toast(error.message, true); }
+    return;
+  }
   const code = room.code;
   pending = true;
   render();
@@ -471,13 +546,14 @@ function disconnect() {
 
 function connect() {
   disconnect();
-  if (!room) return;
+  if (!room || local) return;
   const code = room.code;
   setConnection('Connecting');
-  const connection = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + code);
+  const base = server ? new URL(server) : location;
+  const connection = new WebSocket((base.protocol === 'https:' ? 'wss://' : 'ws://') + base.host + '/ws/' + code);
   socket = connection;
   connection.onopen = () => {
-    connection.send(JSON.stringify({ token }));
+    connection.send(JSON.stringify(API_KEY ? { token, key: API_KEY } : { token }));
     heartbeat = setInterval(() => { if (connection.readyState === WebSocket.OPEN) connection.send('ping'); }, 25000);
   };
   connection.onmessage = event => {
@@ -504,25 +580,45 @@ function connect() {
 }
 
 async function refreshRoom() {
-  if (!room) return;
+  if (!room || local) return;
   const code = room.code;
   try { const next = await api('/rooms/' + code); if (room?.code === code) acceptRoom(next); }
   catch { setConnection('Offline', true); }
 }
 
+/** Start or resume a game that runs in this browser. */
+function openLocal(instance) {
+  disconnect();
+  local?.dispose();
+  local = instance;
+  token = '';
+  room = instance.snapshot();
+  selectedWorker = -1;
+  hint = null;
+  lastHistoryKey = '';
+  $('hint-result').hidden = true;
+  storage.remove('santorini.active');
+  history.replaceState(null, '', location.pathname);
+  if (focused()) setDrawer(false, false);
+  render();
+  local.scheduleAgent();
+}
+
 function saveSession(data) {
+  local?.forget();
+  local = null;
   token = data.token;
   room = data.room;
   selectedWorker = -1;
   hint = null;
   lastHistoryKey = '';
   $('hint-result').hidden = true;
-  $('action-feedback').hidden = true;
   storage.set('santorini.session.' + room.code, token);
   storage.set('santorini.active', room.code);
   storage.set('santorini.name', $('player-name').value.trim());
-  history.replaceState(null, '', '/?room=' + room.code);
+  history.replaceState(null, '', location.pathname + '?room=' + room.code);
   retry = 0;
+  if (focused()) setDrawer(false, false);
   render();
   connect();
 }
@@ -530,10 +626,21 @@ function saveSession(data) {
 async function startGame() {
   feedback.unlock().catch(() => {});
   if (pending) return;
+  const typed = $('player-name').value.trim(), second = $('second-name').value.trim();
+  storage.set('santorini.name', typed);
+  if (mode === 'local') storage.set('santorini.name2', second);
+  if (mode !== 'online') {
+    if (mode === 'ai') agent.warm(level);
+    const names = mode === 'ai' ? { name: 'You' } : { name: typed || 'Coral player', rival: second || 'Gold player' };
+    openLocal(LocalRoom.create({ mode, ...names, level }, { agent, storage, onChange: acceptRoom }));
+    if (window.innerWidth <= 1080) $('board-frame').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+  if (serverOnline === false) { toast('Online play needs the game server, and this site does not have one. Play the agent or pass and play instead.', true); return; }
   pending = true;
   $('start-button').disabled = true;
   try {
-    const body = { mode, name: $('player-name').value.trim() || 'Island builder', ...(mode === 'ai' && level ? { level } : {}) };
+    const body = { mode, name: typed || 'Coral player' };
     const data = await api('/rooms', { method: 'POST', body: JSON.stringify(body) });
     saveSession(data);
     if (window.innerWidth <= 1080) $('board-frame').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -545,12 +652,13 @@ async function joinGame(event) {
   event.preventDefault();
   const code = $('room-code').value.trim().toUpperCase();
   if (!/^[A-Z0-9]{6}$/.test(code)) { toast('Room codes have six letters and numbers.', true); return; }
+  if (serverOnline === false) { toast('Joining a room needs the game server, and this site does not have one.', true); return; }
   const button = event.submitter;
   button.disabled = true;
   try {
     const saved = storage.get('santorini.session.' + code);
     if (saved) saveSession({ room: await api('/rooms/' + code, { headers: { Authorization: 'Bearer ' + saved } }), token: saved });
-    else saveSession(await api('/rooms/' + code + '/join', { method: 'POST', body: JSON.stringify({ name: $('player-name').value.trim() || 'Guest' }) }));
+    else saveSession(await api('/rooms/' + code + '/join', { method: 'POST', body: JSON.stringify({ name: $('player-name').value.trim() || 'Gold player' }) }));
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; render(); }
 }
@@ -570,21 +678,25 @@ function closeConfirmation(result) {
 }
 
 async function leaveGame() {
-  if (room?.game.winner === null && room.ready && !(await confirmAction('Leave this game?', 'It stays saved. Enter room code ' + room.code + ' in this browser to return to your seat.', 'Back to lobby'))) return;
+  const unfinished = room?.game.winner === null && room.ready && room.history.length;
+  if (unfinished && !(await confirmAction('Leave this game?', local ? 'Games on this device end when you leave.'
+    : 'It stays saved. Enter room code ' + room.code + ' in this browser to return to your seat.', 'Back to lobby'))) return;
+  local?.forget();
+  local = null;
   disconnect();
   room = null;
   token = '';
   selectedWorker = -1;
   hint = null;
   storage.remove('santorini.active');
-  history.replaceState(null, '', '/');
-  $('action-feedback').hidden = true;
+  history.replaceState(null, '', location.pathname);
   render();
+  if (focused()) setDrawer(true, false);
 }
 
 async function resignGame() {
   if (!room || !(await confirmAction('Resign this game?', 'Your opponent wins. You can both play again afterwards.', 'Resign'))) return;
-  try { acceptRoom(await api('/rooms/' + room.code + '/resign', { method: 'POST' })); }
+  try { acceptRoom(local ? local.resign() : await api('/rooms/' + room.code + '/resign', { method: 'POST' })); }
   catch (error) { toast(error.message, true); }
 }
 
@@ -592,14 +704,14 @@ async function rematch() {
   if (!room || pending) return;
   pending = true;
   render();
-  try { acceptRoom(await api('/rooms/' + room.code + '/rematch', { method: 'POST' })); }
+  try { acceptRoom(local ? local.rematch() : await api('/rooms/' + room.code + '/rematch', { method: 'POST' })); }
   catch (error) { toast(error.message, true); }
   finally { pending = false; render(); }
 }
 
 async function copyInvite() {
   if (!room) return;
-  const link = location.origin + '/?room=' + room.code;
+  const link = location.origin + location.pathname + '?room=' + room.code;
   try { await navigator.clipboard.writeText(link); toast('Invitation link copied. Send it to your friend.'); }
   catch { toast('Copying is blocked here. Share room code ' + room.code + ' instead.'); }
 }
@@ -610,7 +722,7 @@ async function requestHint() {
   hintPending = true;
   render();
   try {
-    const suggestion = await api('/rooms/' + code + '/hint', { method: 'POST', body: JSON.stringify({ revision }) });
+    const suggestion = local ? await local.hint(revision) : await api('/rooms/' + code + '/hint', { method: 'POST', body: JSON.stringify({ revision }) });
     if (!room || room.code !== code || room.game.revision !== suggestion.revision) return;
     if (room.game.phase === 'move' && suggestion.worker !== null) selectedWorker = suggestion.worker;
     const from = room.game.phase === 'move' ? room.game.workers[room.game.current][suggestion.worker] : -1;
@@ -629,14 +741,51 @@ async function requestHint() {
   finally { hintPending = false; render(); }
 }
 
+// ------------------------------------------------------------------ full screen
+
+const fullscreenApi = Boolean(document.documentElement.requestFullscreen && document.fullscreenEnabled);
+const focused = () => document.body.classList.contains('focus');
+
+/** The game panel slides over the island in full screen. */
+function setDrawer(open, restoreFocus = true) {
+  document.body.classList.toggle('drawer-open', open);
+  $('panel-button').setAttribute('aria-expanded', String(open));
+  if (open) $('drawer-close').focus();
+  else if (restoreFocus && focused()) $('panel-button').focus();
+}
+
+function setFocusLayout(on) {
+  document.body.classList.toggle('focus', on);
+  $('fullscreen-button').setAttribute('aria-pressed', String(on));
+  $('fullscreen-button').setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
+  $('fullscreen-button').title = on ? 'Exit full screen (F)' : 'Full screen (F)';
+  $('fullscreen-button').querySelector('use').setAttribute('href', on ? '#i-collapse' : '#i-expand');
+  // In the lobby there is nothing to play yet, so show the options straight away.
+  setDrawer(on && !room, false);
+}
+
+/** Real full screen where the browser allows it; otherwise (iPhone) the same layout inside the page. */
+async function toggleFullscreen() {
+  const on = !focused();
+  if (fullscreenApi) {
+    try {
+      if (on) await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      else if (document.fullscreenElement) await document.exitFullscreen();
+    } catch { /* Refused (for example inside a frame): the in-page layout still applies. */ }
+  }
+  setFocusLayout(on);
+}
+
 async function showAgent() {
   $('agent-dialog').showModal();
   $('agent-stats').textContent = 'Loading the agent’s record…';
   $('evaluation-results').replaceChildren();
   try {
-    const info = await api('/agent');
+    const manifest = await agent.manifest();
+    const strongest = manifest.levels.find(entry => entry.id === 'full') || manifest.levels.at(-1);
+    const info = { metadata: strongest.metadata, evaluation: strongest.evaluation && { results: strongest.evaluation }, levels: manifest.levels.map(entry => ({
+      id: entry.id, name: entry.name, available: true, steps: entry.metadata.steps, win_rates: { lookahead: entry.evaluation?.lookahead?.win_rate } })) };
     $('agent-stats').replaceChildren();
-    if (!info.available) { $('agent-stats').textContent = 'No trained checkpoint is loaded. See the README to train one.'; return; }
     const meta = info.metadata;
     for (const [value, label] of [[meta.episodes, 'training games'], [meta.steps, 'decisions learned from'], [meta.updates, 'PPO updates']]) {
       const stat = document.createElement('div'), number = document.createElement('b'), caption = document.createElement('span');
@@ -650,7 +799,7 @@ async function showAgent() {
     $('level-results').replaceChildren(...ladder.map(entry => {
       const row = document.createElement('div'), label = document.createElement('span'), value = document.createElement('strong'), note = document.createElement('small');
       row.className = 'result-row';
-      label.textContent = entry.name;
+      label.textContent = levelLabel(entry.id) + (LEVEL_ROLE[entry.id] ? ' (' + LEVEL_ROLE[entry.id].toLowerCase() + ')' : '');
       value.textContent = entry.win_rates?.lookahead === undefined ? 'Not evaluated' : Math.round(entry.win_rates.lookahead * 100) + '% vs lookahead';
       note.textContent = Number(entry.steps).toLocaleString() + ' training decisions';
       row.append(label, value, note);
@@ -677,15 +826,51 @@ async function showAgent() {
 function updateSoundButton() {
   $('sound-toggle').setAttribute('aria-pressed', String(feedback.enabled));
   $('sound-toggle').querySelector('use').setAttribute('href', feedback.enabled ? '#i-sound' : '#i-mute');
-  $('sound-toggle').title = feedback.enabled ? 'Sound on' : 'Sound off';
+  $('sound-toggle').querySelector('span').textContent = feedback.enabled ? 'Sound on' : 'Sound off';
 }
 
 // ------------------------------------------------------------------ wiring
 
-for (const button of document.querySelectorAll('[data-mode]')) button.addEventListener('click', () => {
-  mode = button.dataset.mode;
-  for (const choice of document.querySelectorAll('[data-mode]')) choice.setAttribute('aria-checked', String(choice === button));
+function chooseMode(next) {
+  mode = next;
+  for (const choice of document.querySelectorAll('[data-mode]')) {
+    choice.setAttribute('aria-checked', String(choice.dataset.mode === mode));
+    choice.tabIndex = choice.dataset.mode === mode ? 0 : -1;
+  }
   render();
+}
+
+for (const button of document.querySelectorAll('[data-mode]')) button.addEventListener('click', () => {
+  if (button.getAttribute('aria-disabled') === 'true') {
+    toast('Online play needs a game server, and this site does not have one. The agent and pass and play work here.');
+    return;
+  }
+  if (button.dataset.state === 'waking') {
+    toast('The game server is waking up. This takes about a minute, and online play turns on by itself.');
+    return;
+  }
+  if (button.dataset.state === 'unreachable') {
+    showNotice('Checking the game server…');
+    checkServer({ wake: true }).then(ok => {
+      if (ok) chooseMode('online');
+      else toast('The game server is still not responding. You can play the agent or pass and play meanwhile.');
+    });
+    return;
+  }
+  chooseMode(button.dataset.mode);
+});
+
+/** Radio groups: arrow keys move the choice, as with native radio buttons. */
+for (const group of document.querySelectorAll('[role=radiogroup]')) group.addEventListener('keydown', event => {
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+  if (!step) return;
+  const options = [...group.querySelectorAll('[role=radio]')].filter(option => option.getAttribute('aria-disabled') !== 'true');
+  const index = options.indexOf(document.activeElement);
+  if (index < 0) return;
+  event.preventDefault();
+  const next = options[(index + step + options.length) % options.length];
+  next.click();
+  next.focus();
 });
 $('start-button').addEventListener('click', startGame);
 $('join-form').addEventListener('submit', joinGame);
@@ -708,6 +893,11 @@ $('grid-toggle').addEventListener('click', () => {
   panel.hidden = !panel.hidden;
   $('grid-toggle').setAttribute('aria-expanded', String(!panel.hidden));
 });
+$('fullscreen-button').addEventListener('click', toggleFullscreen);
+$('panel-button').addEventListener('click', () => setDrawer(!document.body.classList.contains('drawer-open')));
+$('drawer-close').addEventListener('click', () => setDrawer(false));
+// Leaving full screen with Esc or the browser's own controls restores the normal page.
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && focused()) setFocusLayout(false); });
 $('rules-button').addEventListener('click', () => $('rules-dialog').showModal());
 $('agent-button').addEventListener('click', showAgent);
 for (const button of document.querySelectorAll('.dialog-close, .dialog-done')) button.addEventListener('click', () => button.closest('dialog').close());
@@ -725,10 +915,13 @@ $('quality-select').addEventListener('change', () => {
   board.setQuality($('quality-select').value);
   storage.set('santorini.quality', $('quality-select').value);
 });
-window.addEventListener('online', () => { if (room) { refreshRoom(); connect(); } });
+window.addEventListener('online', () => { if (local && room?.ai_error) local.retry(); else if (room) { refreshRoom(); connect(); } });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && room) refreshRoom(); });
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || event.target.matches('input, select, textarea') || document.querySelector('dialog[open]')) return;
+  if (event.target.matches('input, select, textarea') || document.querySelector('dialog[open]')) return;
+  if ((event.key === 'f' || event.key === 'F') && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); toggleFullscreen(); return; }
+  if (event.key !== 'Escape') return;
+  if (document.body.classList.contains('drawer-open')) { setDrawer(false); return; }
   selectedWorker = -1;
   hint = null;
   $('hint-result').hidden = true;
@@ -738,18 +931,55 @@ document.addEventListener('keydown', event => {
 /** Read-only hook for automated browser checks. Holds no credentials. */
 Object.defineProperty(window, 'santorini', { value: Object.freeze({ board, get room() { return room ? structuredClone(room) : null; } }) });
 
+/** Online play is offered only when the game server answers. */
+async function probe(timeout) {
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(server + '/api/health', { signal: controller.signal, cache: 'no-store' });
+    return response.ok && (await response.json()).online === true;
+  } catch { return false; } finally { clearTimeout(timer); }
+}
+
+/** With `wake`, a server that does not answer at once gets about 90 seconds: free hosts such as
+ * Render put idle servers to sleep, and the first request takes about a minute to wake them. */
+async function checkServer({ wake = false } = {}) {
+  if (server === null) { serverOnline = false; if (!room) render(); return false; }
+  serverOnline = await probe(5000);
+  if (!serverOnline && wake) {
+    serverWaking = true;
+    if (!room) render();
+    const until = Date.now() + 90000;
+    while (!serverOnline && Date.now() < until) {
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      serverOnline = await probe(15000);
+    }
+    serverWaking = false;
+  }
+  if (!room) render();
+  return serverOnline;
+}
+
 async function initialize() {
   $('player-name').value = storage.get('santorini.name') || '';
+  $('second-name').value = storage.get('santorini.name2') || '';
   feedback.enabled = storage.get('santorini.sound') === true;
   updateSoundButton();
   const quality = storage.get('santorini.quality');
   $('quality-select').value = ['auto', 'high', 'economy'].includes(quality) ? quality : 'auto';
   board.setQuality($('quality-select').value);
   const requested = new URLSearchParams(location.search).get('room')?.toUpperCase();
-  const code = requested || storage.get('santorini.active');
-  render();
+  chooseMode(mode);
   loadLevels();
+  const health = checkServer({ wake: true });
+  const resumed = !requested && LocalRoom.restore({ agent, storage, onChange: acceptRoom });
+  if (resumed) { openLocal(resumed); return; }
+  const code = requested || storage.get('santorini.active');
   if (!code || !/^[A-Z0-9]{6}$/.test(code)) return;
+  if (!(await health)) {
+    toast(server === null ? 'This invitation is for an online game, which needs the game server. This site does not have one.'
+      : 'The game server is not responding, so this invitation cannot open yet. Try again in a minute.', true);
+    return;
+  }
   const savedToken = storage.get('santorini.session.' + code);
   if (!savedToken) {
     $('room-code').value = code;

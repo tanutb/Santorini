@@ -1,80 +1,113 @@
-"""Authoritative multiplayer API and same-origin website."""
+"""Online rooms for two players, plus the website itself.
+
+Games against the agent and pass-and-play games run entirely in the browser (web/local-game.js),
+so this server needs no machine-learning libraries. Configuration lives in server/security.py.
+"""
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
-import pickle
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictInt
 
 from server.game import Game
-from server.inference import AgentLevels, AgentService
+from server.security import BodyLimit, RateLimiter, Settings, clean_name, client_ip, key_matches, security_headers
 from server.storage import RoomStore
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = "3.0.0"
+CLEANUP_INTERVAL = 6 * 3600
 logger = logging.getLogger(__name__)
-# Pause before each agent action so the previous animation can finish and the turn reads clearly.
-AI_DELAY = 0.6
-INFERENCE_ERRORS = (OSError, RuntimeError, ValueError, ImportError, KeyError, EOFError, pickle.UnpicklingError)
+settings = Settings()
+limiter = RateLimiter(settings.rate_limits)
 store = RoomStore(Path(os.getenv("SANTORINI_DB", str(ROOT / "data/rooms.sqlite3"))))
-agent_service = AgentService()
-agent_levels = AgentLevels(agent_service)
 rooms: dict[str, dict] = {}
+last_used: dict[str, float] = {}
 locks: dict[str, asyncio.Lock] = {}
 connections: dict[str, dict[WebSocket, int]] = {}
-ai_tasks: dict[str, asyncio.Task] = {}
-background: set[asyncio.Task] = set()
+sockets_by_ip: dict[str, int] = {}
+
+
+async def housekeeping() -> None:
+    """Expire week-old rooms and drop idle rooms from memory, so a long-running server stays small."""
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL)
+        store.cleanup()
+        idle = time.monotonic() - CLEANUP_INTERVAL
+        for code in [code for code, used in last_used.items() if used < idle and not connections.get(code)]:
+            rooms.pop(code, None)
+            locks.pop(code, None)
+            last_used.pop(code, None)
+            connections.pop(code, None)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.cleanup()
+    task = asyncio.create_task(housekeeping())
     yield
-    tasks = [*ai_tasks.values(), *background]
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
     store.close()
 
 
-app = FastAPI(title="Santorini", lifespan=lifespan)
+app = FastAPI(title="Santorini online rooms", version=VERSION, lifespan=lifespan,
+              docs_url="/docs" if settings.api_docs else None, redoc_url=None,
+              openapi_url="/openapi.json" if settings.api_docs else None)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+if settings.allowed_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=list(settings.allowed_origins), allow_methods=["GET", "POST"],
+                       allow_headers=["Authorization", "Content-Type", "X-API-Key"], max_age=600)
+app.add_middleware(BodyLimit, limit=settings.max_body)
 
 
 @app.middleware("http")
-async def cache_policy(request: Request, call_next):
-    """Revalidate code on every load (cheap 304s via ETag); fonts never change between releases."""
+async def headers_and_caching(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/static/"):
-        immutable = request.url.path.startswith("/static/fonts/")
-        response.headers["Cache-Control"] = "public, max-age=2592000" if immutable else "no-cache"
+    path = request.url.path
+    if path.startswith("/static/"):
+        response.headers["Cache-Control"] = "public, max-age=2592000" if path.startswith("/static/fonts/") else "no-cache"
+    elif path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    security_headers(request, response.headers, is_page=path in ("/", "/learn.html"))
     return response
 
 
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    if settings.api_keys and not key_matches(x_api_key, settings.api_keys):
+        raise HTTPException(401, "A valid X-API-Key header is required.")
+
+
+def limit(action: str):
+    def dependency(request: Request) -> None:
+        limiter.check(client_ip(request), action)
+    return Depends(dependency)
+
+
+api_key = Depends(require_api_key)
+
+
 class CreateRoom(BaseModel):
-    mode: Literal["online", "local", "ai"]
-    name: str = Field(default="You", min_length=1, max_length=24)
-    level: str | None = Field(default=None, max_length=24)
+    mode: str = Field(default="online", max_length=12)
+    name: str = Field(default="Player one", min_length=1, max_length=48)
 
 
 class JoinRoom(BaseModel):
-    name: str = Field(default="Guest", min_length=1, max_length=24)
-
-
-class HintRequest(BaseModel):
-    revision: StrictInt = Field(ge=0)
+    name: str = Field(default="Guest", min_length=1, max_length=48)
 
 
 class ActionRequest(BaseModel):
@@ -91,6 +124,7 @@ def get_room(code: str) -> dict:
         if room is None:
             raise HTTPException(404, "Room not found or expired. Create a new room.")
         rooms[code] = room
+    last_used[code] = time.monotonic()
     return rooms[code]
 
 
@@ -118,13 +152,9 @@ def authenticate(room: dict, authorization: str | None) -> int:
 def snapshot(room: dict, seat: int) -> dict:
     game = Game.from_dict(room["game"])
     active = list(connections.get(room["code"], {}).values())
-    return {"code": room["code"], "mode": room["mode"], "seat": seat,
-            "players": room["players"], "connected": [i in active for i in range(2)],
-            "game": room["game"], "legal": game.legal_actions(), "history": room["history"][-100:],
-            "rematch": room["rematch"], "ai_error": room.get("ai_error"),
-            "insight": room.get("insight") if room["mode"] != "online" else None,
-            "level": room.get("level"),
-            "ready": room["players"][1] is not None}
+    return {"code": room["code"], "mode": "online", "seat": seat, "players": room["players"],
+            "connected": [i in active for i in range(2)], "game": room["game"], "legal": game.legal_actions(),
+            "history": room["history"][-100:], "rematch": room["rematch"], "ready": room["players"][1] is not None}
 
 
 async def broadcast(room: dict) -> None:
@@ -135,129 +165,51 @@ async def broadcast(room: dict) -> None:
             connections.get(room["code"], {}).pop(socket, None)
 
 
-def apply_action(room: dict, action: int) -> None:
-    game = Game.from_dict(room["game"])
-    actor = game.current
-    message = game.apply(action)
-    room["game"] = game.to_dict()
-    room["history"].append({"player": actor, "text": message, "revision": game.revision})
-    room["ai_error"] = None
-    store.save(room)
-
-
-def schedule_insight(room: dict) -> None:
-    """Coached games get the critic's read of each new position, pushed when ready."""
-    game = room["game"]
-    # Scored at turn boundaries only: the calibration was fitted on move-phase positions.
-    if room["mode"] == "online" or game["winner"] is not None or game["phase"] != "move":
-        return
-    task = asyncio.create_task(update_insight(room, Game.from_dict(game)))
-    background.add(task)
-    task.add_done_callback(background.discard)
-
-
-async def update_insight(room: dict, game: Game) -> None:
-    try:
-        insight = await asyncio.to_thread(agent_service.insight, game)
-    except INFERENCE_ERRORS:
-        return
-    if insight is None:
-        return
-    async with room_lock(room["code"]):
-        if room["game"]["revision"] == insight["revision"]:
-            room["insight"] = insight
-            await broadcast(room)
-
-
-async def run_ai(room: dict) -> None:
-    try:
-        while True:
-            async with room_lock(room["code"]):
-                state = Game.from_dict(room["game"])
-                if state.current != 1 or state.winner is not None:
-                    return
-            await asyncio.sleep(AI_DELAY)
-            action = await asyncio.to_thread(agent_levels.get(room.get("level")).action, state)
-            async with room_lock(room["code"]):
-                if room["game"]["revision"] != state.revision:
-                    return
-                apply_action(room, action)
-                await broadcast(room)
-                schedule_insight(room)
-    except INFERENCE_ERRORS:
-        logger.exception("Agent inference failed")
-        room["ai_error"] = "The agent could not load its checkpoint. Restore it, then reconnect to retry."
-        await broadcast(room)
-
-
-def schedule_ai(room: dict) -> None:
-    if room["mode"] != "ai":
-        return
-    task = ai_tasks.get(room["code"])
-    if task is None or task.done():
-        ai_tasks[room["code"]] = asyncio.create_task(run_ai(room))
-
-
 @app.get("/api/health")
 async def health() -> dict:
-    return {"ok": True, "rules": "classic", "version": "2.0.0"}
+    return {"ok": True, "rules": "classic", "version": VERSION, "online": True}
 
 
-@app.get("/api/agent")
-async def agent_status() -> dict:
-    status = await asyncio.to_thread(agent_service.status)
-    status["levels"] = await asyncio.to_thread(agent_levels.describe)
-    return status
-
-
-@app.post("/api/rooms", status_code=201)
+@app.post("/api/rooms", status_code=201, dependencies=[api_key, limit("create")])
 async def create_room(request: CreateRoom) -> dict:
-    level = None
-    if request.mode == "ai":
-        level = request.level or agent_levels.default
-        if level not in agent_levels.services:
-            raise HTTPException(422, "Choose one of the listed agent strengths.")
-        if not (await asyncio.to_thread(agent_levels.get(level).status))["available"]:
-            raise HTTPException(503, "The PPO agent needs a trained checkpoint. You can still play locally or online.")
-    if store.count() >= 10000:
+    if request.mode != "online":
+        raise HTTPException(422, "This server hosts online games. Games against the agent and pass and play run in your browser.")
+    if store.count() >= settings.max_rooms:
         raise HTTPException(503, "The server is at room capacity. Try again later.")
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     code = "".join(secrets.choice(alphabet) for _ in range(6))
     while store.load(code):
         code = "".join(secrets.choice(alphabet) for _ in range(6))
     token = secrets.token_urlsafe(32)
-    opponent = {"online": None, "local": "Player two", "ai": "PPO agent"}[request.mode]
-    room = {"code": code, "mode": request.mode, "players": [request.name.strip() or "Player one", opponent],
-            "tokens": [digest(token), None], "game": Game().to_dict(), "history": [], "rematch": [], "ai_error": None,
-            "level": level}
+    room = {"code": code, "mode": "online", "players": [clean_name(request.name, "Player one"), None],
+            "tokens": [digest(token), None], "game": Game().to_dict(), "history": [], "rematch": []}
     rooms[code] = room
+    last_used[code] = time.monotonic()
     store.save(room)
     return {"token": token, "room": snapshot(room, 0)}
 
 
-@app.post("/api/rooms/{code}/join")
+@app.post("/api/rooms/{code}/join", dependencies=[api_key, limit("join")])
 async def join_room(code: str, request: JoinRoom) -> dict:
     room = get_room(code)
     async with room_lock(room["code"]):
-        if room["mode"] != "online" or room["players"][1] is not None:
-            raise HTTPException(409, "This room already has two players, or is not an online room.")
+        if room["players"][1] is not None:
+            raise HTTPException(409, "This room already has two players.")
         token = secrets.token_urlsafe(32)
-        room["players"][1] = request.name.strip() or "Guest"
+        room["players"][1] = clean_name(request.name, "Guest")
         room["tokens"][1] = digest(token)
         store.save(room)
         await broadcast(room)
         return {"token": token, "room": snapshot(room, 1)}
 
 
-@app.get("/api/rooms/{code}")
+@app.get("/api/rooms/{code}", dependencies=[api_key, limit("read")])
 async def read_room(code: str, authorization: str | None = Header(default=None)) -> dict:
     room = get_room(code)
-    seat = authenticate(room, authorization)
-    schedule_ai(room)
-    return snapshot(room, seat)
+    return snapshot(room, authenticate(room, authorization))
 
 
-@app.post("/api/rooms/{code}/actions")
+@app.post("/api/rooms/{code}/actions", dependencies=[api_key, limit("write")])
 async def action(code: str, request: ActionRequest, authorization: str | None = Header(default=None)) -> dict:
     room = get_room(code)
     seat = authenticate(room, authorization)
@@ -266,58 +218,34 @@ async def action(code: str, request: ActionRequest, authorization: str | None = 
             raise HTTPException(409, "Wait for your friend to join before placing workers.")
         if request.revision != room["game"]["revision"]:
             raise HTTPException(409, "The board changed. Your position has been refreshed; choose again.")
-        if room["mode"] != "local" and seat != room["game"]["current"]:
+        if seat != room["game"]["current"]:
             raise HTTPException(403, "It is the other player's turn.")
+        game = Game.from_dict(room["game"])
         try:
-            apply_action(room, request.action)
+            message = game.apply(request.action)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
+        room["game"] = game.to_dict()
+        room["history"].append({"player": seat, "text": message, "revision": game.revision})
+        store.save(room)
         await broadcast(room)
-        schedule_ai(room)
-        schedule_insight(room)
         return snapshot(room, seat)
 
 
-
-@app.post("/api/rooms/{code}/hint")
-async def hint(code: str, request: HintRequest, authorization: str | None = Header(default=None)) -> dict:
-    room = get_room(code)
-    seat = authenticate(room, authorization)
-    async with room_lock(room["code"]):
-        if room["mode"] == "online":
-            raise HTTPException(403, "Practice hints are available in agent and pass-and-play games.")
-        game = Game.from_dict(room["game"])
-        if game.winner is not None or (room["mode"] == "ai" and game.current != seat):
-            raise HTTPException(409, "Wait until your turn to request a hint.")
-        if request.revision != game.revision:
-            raise HTTPException(409, "The position changed. Request a hint for the current board.")
-    try:
-        suggestion = await asyncio.to_thread(agent_service.suggest, game)
-    except INFERENCE_ERRORS as error:
-        raise HTTPException(503, "Hints need a working PPO checkpoint. You can continue playing.") from error
-    if room["game"]["revision"] != game.revision:
-        raise HTTPException(409, "The position changed while the hint was being prepared.")
-    return suggestion
-
-
-@app.post("/api/rooms/{code}/resign")
+@app.post("/api/rooms/{code}/resign", dependencies=[api_key, limit("write")])
 async def resign(code: str, authorization: str | None = Header(default=None)) -> dict:
     room = get_room(code)
     seat = authenticate(room, authorization)
     async with room_lock(room["code"]):
         if room["game"]["winner"] is not None:
             raise HTTPException(409, "This game has already finished.")
-        if room["mode"] == "local":
-            seat = room["game"]["current"]
-        room["game"]["winner"] = 1 - seat
-        room["game"]["reason"] = "Opponent resigned"
-        room["game"]["revision"] += 1
+        room["game"].update(winner=1 - seat, reason="Opponent resigned", revision=room["game"]["revision"] + 1)
         store.save(room)
         await broadcast(room)
         return snapshot(room, seat)
 
 
-@app.post("/api/rooms/{code}/rematch")
+@app.post("/api/rooms/{code}/rematch", dependencies=[api_key, limit("write")])
 async def rematch(code: str, authorization: str | None = Header(default=None)) -> dict:
     room = get_room(code)
     seat = authenticate(room, authorization)
@@ -326,10 +254,10 @@ async def rematch(code: str, authorization: str | None = Header(default=None)) -
             raise HTTPException(409, "Finish the current game before requesting a rematch.")
         if seat not in room["rematch"]:
             room["rematch"].append(seat)
-        if room["mode"] != "online" or len(room["rematch"]) == 2:
+        if len(room["rematch"]) == 2:
             # Monotonic revisions also invalidate delayed requests from previous games.
             room["game"] = Game(revision=room["game"]["revision"] + 1).to_dict()
-            room["history"], room["rematch"], room["ai_error"], room["insight"] = [], [], None, None
+            room["history"], room["rematch"] = [], []
         store.save(room)
         await broadcast(room)
         return snapshot(room, seat)
@@ -342,43 +270,80 @@ def same_origin(socket: WebSocket) -> bool:
     if not origin:
         return True
     forwarded = [host.strip() for host in socket.headers.get("x-forwarded-host", "").split(",") if host.strip()]
-    return urlparse(origin).netloc in {socket.headers.get("host"), *forwarded}
+    return urlparse(origin).netloc in {socket.headers.get("host"), *forwarded} or origin.rstrip("/") in settings.allowed_origins
 
 
 @app.websocket("/ws/{code}")
 async def websocket_room(socket: WebSocket, code: str) -> None:
-    if not same_origin(socket):
+    ip = client_ip(socket)
+    try:
+        limiter.check(ip, "socket")
+    except HTTPException:
+        await socket.close(code=1013)
+        return
+    if not same_origin(socket) or sockets_by_ip.get(ip, 0) >= settings.max_sockets_per_ip:
         await socket.close(code=1008)
         return
     await socket.accept()
+    sockets_by_ip[ip] = sockets_by_ip.get(ip, 0) + 1
     room = None
     try:
         auth = await asyncio.wait_for(socket.receive_json(), timeout=10)
         if not isinstance(auth, dict) or not isinstance(auth.get("token"), str):
             await socket.close(code=1008)
             return
-        room = get_room(code)
-        seat = seat_for(room, auth["token"])
+        if settings.api_keys and not key_matches(auth.get("key") if isinstance(auth.get("key"), str) else None, settings.api_keys):
+            await socket.close(code=1008)
+            return
+        candidate = get_room(code)
+        seat = seat_for(candidate, auth["token"])
+        if len(connections.get(candidate["code"], {})) >= settings.max_sockets_per_room:
+            await socket.close(code=1013)
+            return
+        room = candidate
         connections.setdefault(room["code"], {})[socket] = seat
         await broadcast(room)
-        schedule_ai(room)
+        window, count = time.monotonic(), 0
         while True:
             message = await socket.receive_text()
+            # Clients ping every 25 s; more than 20 messages in 10 s ends the connection.
+            now = time.monotonic()
+            if now - window > 10:
+                window, count = now, 0
+            count += 1
+            if count > 20:
+                await socket.close(code=1008)
+                return
             if message == "ping":
                 await socket.send_json({"type": "pong"})
-    except (WebSocketDisconnect, asyncio.TimeoutError, ValueError):
+    except (WebSocketDisconnect, asyncio.TimeoutError, ValueError, RuntimeError):
         pass
     except HTTPException:
         await socket.close(code=1008)
     finally:
+        sockets_by_ip[ip] = max(0, sockets_by_ip.get(ip, 1) - 1)
+        if not sockets_by_ip[ip]:
+            sockets_by_ip.pop(ip, None)
         if room is not None:
             connections.get(room["code"], {}).pop(socket, None)
             await broadcast(room)
 
 
-@app.get("/")
+@app.get("/static/config.js", include_in_schema=False)
+async def page_config() -> Response:
+    """The page served by this server plays online here, and sends this server's public key if one is set."""
+    body = f"export const SERVER_URL = '';\nexport const API_KEY = {json.dumps(settings.public_key)};\n"
+    return Response(body, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
     return FileResponse(ROOT / "web/index.html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/learn.html", include_in_schema=False)
+async def learn() -> FileResponse:
+    return FileResponse(ROOT / "web/learn.html", headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
