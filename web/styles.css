@@ -147,6 +147,11 @@ input::placeholder { color: #8796a2; }
 .level[aria-checked="true"] { border-color: var(--dome); box-shadow: inset 0 0 0 1px var(--dome); color: var(--dome); }
 .level[aria-checked="true"] svg rect:not(.unbuilt) { fill: var(--dome-tint); }
 .strength .note { min-height: 4.4em; }
+.order { margin-bottom: 22px; }
+.order-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.order-option { padding: 10px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink-soft); font-weight: 600; font-size: 14px; }
+.order-option:hover { border-color: #b9c7cf; }
+.order-option[aria-checked="true"] { border-color: var(--dome); box-shadow: inset 0 0 0 1px var(--dome); color: var(--dome); }
 
 .names { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 22px; }
 .button { height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); font-weight: 600; font-size: 14.5px; white-space: nowrap; }

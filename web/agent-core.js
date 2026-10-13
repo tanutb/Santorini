@@ -1,7 +1,7 @@
 /** Loads the exported networks and answers move and hint requests. Runs in a worker or, as a fallback, on the page. */
 import { Game } from './engine.js';
 import { Policy, pick } from './policy.js';
-import { tacticalMask } from './tactics.js';
+import { SEARCH_DEPTH, tacticalMask } from './tactics.js';
 import { explainAction } from './coach.js';
 import { orient, unorient } from './symmetry.js';
 
@@ -18,9 +18,13 @@ export async function loadManifest() {
   return manifest;
 }
 
-async function policyFor(level) {
+async function levelEntry(level) {
   const { levels, default: fallback } = await loadManifest();
-  const entry = levels.find(item => item.id === level) || levels.find(item => item.id === fallback);
+  return levels.find(item => item.id === level) || levels.find(item => item.id === fallback);
+}
+
+async function policyFor(level) {
+  const entry = await levelEntry(level);
   if (!policies.has(entry.id)) {
     policies.set(entry.id, (async () => {
       const url = new URL(entry.file, MODELS);
@@ -37,11 +41,12 @@ async function policyFor(level) {
 /** The agent's move, sampled from its policy while it reads the board through the game's frame (see symmetry.js). */
 export async function move(state, level, frame = 0) {
   const game = Game.fromDict(orient(state, frame)), policy = await policyFor(level);
-  const { probabilities } = policy.evaluate(game.observation(), tacticalMask(game));
+  const depth = SEARCH_DEPTH[(await levelEntry(level)).id] ?? SEARCH_DEPTH.full;
+  const { probabilities } = policy.evaluate(game.observation(), tacticalMask(game, depth));
   return { action: unorient(pick(probabilities), frame), revision: game.revision };
 }
 
-/** The strongest network's top tactically allowed choice and its conditional probability. */
+/** The strongest network's top choice among the best-ranked turns, and its conditional probability. */
 export async function hint(state) {
   const game = Game.fromDict(state), policy = await policyFor('full');
   const { probabilities } = policy.evaluate(game.observation(), tacticalMask(game));

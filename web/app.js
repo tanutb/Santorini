@@ -27,6 +27,8 @@ let socket = null, reconnectTimer = null, heartbeat = null, polling = null, retr
 let toastTimer = 0, noticeTimer = 0, feedbackTimer = 0, confirmResolve = null;
 let hint = null, hintPending = false, lastHistoryKey = '';
 let levels = [], level = null;
+// Against the agent, the seat the player takes: 0 moves first, 1 lets the agent start.
+let seat = storage.get('santorini.seat') === 1 ? 1 : 0;
 // Agent and pass-and-play games run in this browser; only online games use the game server.
 let local = null, serverOnline = null, serverWaking = false;
 const agent = new AgentClient();
@@ -200,6 +202,7 @@ function render() {
 function renderLobby() {
   board.setState(demoGame(), { targets: [] });
   renderStrength();
+  renderOrder();
   // No server configured (static site) and an unreachable server read differently; both keep the agent playable.
   const waking = serverWaking && server !== null, offline = serverOnline === false && !waking;
   const online = document.querySelector('[data-mode=online]');
@@ -269,6 +272,17 @@ function renderStrength() {
   $('strength-note').textContent = chosen ? levelNote(chosen) : '';
 }
 
+/** Who moves first against the agent; moving first is an advantage in Santorini. */
+function renderOrder() {
+  $('order').hidden = mode !== 'ai';
+  for (const button of document.querySelectorAll('[data-seat]')) {
+    const checked = Number(button.dataset.seat) === seat;
+    button.setAttribute('aria-checked', String(checked));
+    button.tabIndex = checked ? 0 : -1;
+  }
+  $('order-note').textContent = seat ? 'The agent places its workers first. You play gold.' : 'You place your workers first and play coral.';
+}
+
 /** How hard a level is, in words a player can use, from its measured results. */
 function levelNote(entry) {
   const pct = value => Math.round(value * 100) + '%';
@@ -278,12 +292,13 @@ function levelNote(entry) {
     sentences.push('For learning the rules: it misses threats you can punish.');
     if (bot !== undefined) sentences.push(`It wins only ${pct(bot)} of games against a simple bot that looks one move ahead.`);
   } else if (entry.id === 'developing') {
-    sentences.push('A real test: it rarely misses an immediate threat.');
+    sentences.push('A real test: it looks two turns ahead, so it stops most tower races.');
     if (bot !== undefined) sentences.push(`It beats the one-move bot ${pct(bot)} of the time${hard?.versus?.developing !== undefined ? `, but Hard wins ${pct(hard.versus.developing)} of games against it` : ''}.`);
   } else {
     sentences.push(`The strongest agent, with ${Math.round(entry.steps / 1e5) / 10} million decisions of practice.`);
     const medium = entry.versus?.developing;
     if (bot !== undefined) sentences.push(`It beats the one-move bot ${pct(bot)} of the time${medium !== undefined ? ` and Medium ${pct(medium)} of the time` : ''}.`);
+    sentences.push('Before each move it searches four turns ahead for wins it can force and losses it must stop.');
   }
   return sentences.join(' ');
 }
@@ -304,7 +319,7 @@ async function loadLevels() {
 
 /** How a player appears in the turn strip and the move list. */
 function displayName(player) {
-  if (room.mode === 'ai') return player === 0 ? 'You' : 'Agent';
+  if (room.mode === 'ai') return player === room.seat ? 'You' : 'Agent';
   if (room.mode === 'online' && player === room.seat) return 'You';
   return room.players[player] || (room.mode === 'online' ? 'Your friend' : COLOR[player] + ' player');
 }
@@ -317,13 +332,13 @@ function renderPlayers() {
     if (!room.players[i]) state = 'Waiting to join';
     else if (game.winner !== null) state = game.winner === i ? 'Winner' : COLOR[i];
     else if (room.mode === 'online' && !room.connected[i]) state = 'Disconnected, seat saved';
-    else if (active && room.mode === 'ai' && i === 1) state = room.ai_error ? 'Stopped' : game.phase === 'place' ? 'Placing workers' : 'Thinking…';
+    else if (active && room.mode === 'ai' && i !== room.seat) state = room.ai_error ? 'Stopped' : game.phase === 'place' ? 'Placing workers' : 'Thinking…';
     else if (active) state = game.phase === 'place' ? 'Placing workers' : isMine(i) && room.mode !== 'local' ? 'Your turn' : 'To play';
-    else if (room.mode === 'ai' && i === 1 && room.level) state = levelLabel(room.level);
+    else if (room.mode === 'ai' && i !== room.seat && room.level) state = levelLabel(room.level);
     $('player-name-' + i).textContent = room.players[i] ? displayName(i) : 'Open seat';
     $('player-state-' + i).textContent = state;
     $('player-' + i).classList.toggle('is-active', active || game.winner === i);
-    $('player-' + i).classList.toggle('thinking', active && room.mode === 'ai' && i === 1 && !room.ai_error);
+    $('player-' + i).classList.toggle('thinking', active && room.mode === 'ai' && i !== room.seat && !room.ai_error);
   }
 }
 
@@ -632,7 +647,7 @@ async function startGame() {
   if (mode !== 'online') {
     if (mode === 'ai') agent.warm(level);
     const names = mode === 'ai' ? { name: 'You' } : { name: typed || 'Coral player', rival: second || 'Gold player' };
-    openLocal(LocalRoom.create({ mode, ...names, level }, { agent, storage, onChange: acceptRoom }));
+    openLocal(LocalRoom.create({ mode, ...names, level, seat }, { agent, storage, onChange: acceptRoom }));
     if (window.innerWidth <= 1080) $('board-frame').scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
   }
@@ -858,6 +873,12 @@ for (const button of document.querySelectorAll('[data-mode]')) button.addEventLi
     return;
   }
   chooseMode(button.dataset.mode);
+});
+
+for (const button of document.querySelectorAll('[data-seat]')) button.addEventListener('click', () => {
+  seat = Number(button.dataset.seat);
+  storage.set('santorini.seat', seat);
+  renderOrder();
 });
 
 /** Radio groups: arrow keys move the choice, as with native radio buttons. */

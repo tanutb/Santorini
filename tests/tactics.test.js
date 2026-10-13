@@ -2,15 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Game } from '../web/engine.js';
-import { tacticalMask } from '../web/tactics.js';
+import { rankTurns, tacticalMask } from '../web/tactics.js';
 import { orient } from '../web/symmetry.js';
 
-const allowed = game => Array.from(tacticalMask(game), (value, action) => value ? action : -1).filter(a => a >= 0);
+const allowed = (game, ...search) => Array.from(tacticalMask(game, ...search), (value, action) => value ? action : -1).filter(a => a >= 0);
 const copy = game => Game.fromDict(game.toDict());
 function threatened() {
   const game = new Game({ workers: [[12, 1], [23, 24]], phase: 'move' });
   game.heights[24] = 2;
   game.heights[18] = 3;
+  return game;
+}
+/** A reported game: the opponent ladders A1 and B1 from the corner while the agent races E4 and D5 a tempo behind. */
+function ladder() {
+  const game = new Game({ workers: [[24, 0], [17, 23]], current: 1, phase: 'move', turn: 8 });
+  Object.assign(game.heights, { 0: 2, 1: 2, 19: 2, 23: 1 });
   return game;
 }
 function replyWins(game) {
@@ -68,6 +74,39 @@ test('unavoidable double threats keep legal actions available', () => {
   }));
 });
 
+test('sends a worker to stop a corner ladder two turns before it wins', () => {
+  // Racing on (D5 to E4) loses: A1 reaches level three next turn and nothing can dome it in time.
+  assert.ok(allowed(ladder(), 1).includes(69));
+  assert.deepEqual(allowed(ladder(), 2), [36, 37]);
+  assert.deepEqual(allowed(ladder()), [36, 37]); // C4 to B3 or C3, one step from doming A1.
+});
+
+test('plays a double threat the opponent cannot answer', () => {
+  const game = new Game({ workers: [[8, 20], [11, 22]], current: 1, phase: 'move' });
+  Object.assign(game.heights, { 11: 1, 12: 2, 13: 2, 7: 3 });
+  const { turns } = rankTurns(game);
+  assert.equal(Math.max(...turns.map(turn => turn.score)), 98, 'a win on the next turn');
+  assert.deepEqual(allowed(game), [37]);
+  game.apply(37);
+  assert.deepEqual(allowed(game), [13], 'D3 to level three beside C2: two threats, one dome');
+});
+
+test('a move keeps its best build when the node budget cuts the search short', () => {
+  for (const budget of [500, 5000, 50000]) {
+    for (let frame = 0; frame < 8; frame++) {
+      const game = Game.fromDict(orient(ladder().toDict(), frame));
+      const { turns } = rankTurns(game, 4, budget), best = Math.max(...turns.map(turn => turn.score));
+      for (const move of allowed(game, 4, budget)) {
+        const moved = copy(game);
+        moved.apply(move);
+        const builds = allowed(moved, 4, budget);
+        assert.ok(builds.length);
+        for (const build of builds) assert.ok(turns.some(turn => turn.move === move && turn.build === build && turn.score === best));
+      }
+    }
+  }
+});
+
 test('placement and finished games preserve their legal masks', () => {
   const game = new Game();
   assert.deepEqual(tacticalMask(game), game.mask());
@@ -93,6 +132,15 @@ test('real network move and hint requests both use the tactical mask', async () 
       game.apply(decision.action);
       assert.equal((await move(game.toDict(), 'full', frame)).action, 18);
       assert.equal((await hint(game.toDict())).action, 18);
+    }
+    for (let frame = 0; frame < 8; frame++) {
+      // The ladder continues A1 to B1, building A1 to level three; the agent must dome it.
+      const game = ladder();
+      while (game.current === 1) game.apply((await move(game.toDict(), 'full', frame)).action);
+      game.apply(51);
+      game.apply(0);
+      while (game.current === 1) game.apply((await move(game.toDict(), 'full', frame)).action);
+      assert.equal(game.heights[0], 4);
     }
   } finally {
     globalThis.fetch = originalFetch;

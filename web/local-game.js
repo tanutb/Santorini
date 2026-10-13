@@ -21,8 +21,11 @@ export class LocalRoom {
     this.error = null;
   }
 
-  static create({ mode, name, rival, level }, services) {
-    const state = { version: 1, mode, players: [name, rival || NAMES[mode]], game: new Game().toDict(), history: [],
+  /** Against the agent, `seat` 1 lets the agent place and move first. */
+  static create({ mode, name, rival, level, seat = 0 }, services) {
+    seat = mode === 'ai' && seat === 1 ? 1 : 0;
+    const players = [name, rival || NAMES[mode]];
+    const state = { version: 1, mode, seat, players: seat ? players.reverse() : players, game: new Game().toDict(), history: [],
       level: mode === 'ai' ? level : null, frame: randomFrame() };
     const room = new LocalRoom(state, services);
     room.save();
@@ -39,9 +42,12 @@ export class LocalRoom {
 
   get code() { return 'LOCAL'; }
 
+  /** The human's seat; games saved before turn order was a choice have the human first. */
+  get seat() { return this.state.seat === 1 ? 1 : 0; }
+
   snapshot() {
     const game = Game.fromDict(this.state.game);
-    return { code: this.code, local: true, mode: this.state.mode, seat: 0, players: [...this.state.players], connected: [true, true],
+    return { code: this.code, local: true, mode: this.state.mode, seat: this.seat, players: [...this.state.players], connected: [true, true],
       game: game.toDict(), legal: game.legalActions(), history: this.state.history.slice(-100), rematch: [],
       ai_error: this.error, level: this.state.level, ready: true };
   }
@@ -71,7 +77,7 @@ export class LocalRoom {
     const game = this.state.game;
     if (revision !== game.revision) throw new Error('The board changed. Choose again.');
     if (game.winner !== null) throw new Error('This game has finished.');
-    if (this.state.mode === 'ai' && game.current !== 0) throw new Error('It is the agent’s turn.');
+    if (this.state.mode === 'ai' && game.current !== this.seat) throw new Error('It is the agent’s turn.');
     this.apply(action);
     this.scheduleAgent();
     return this.snapshot();
@@ -80,7 +86,7 @@ export class LocalRoom {
   resign() {
     const game = this.state.game;
     if (game.winner !== null) throw new Error('This game has already finished.');
-    const resigning = this.state.mode === 'local' ? game.current : 0;
+    const resigning = this.state.mode === 'local' ? game.current : this.seat;
     Object.assign(game, { winner: 1 - resigning, reason: 'Opponent resigned', revision: game.revision + 1 });
     clearTimeout(this.timer);
     this.save();
@@ -110,7 +116,7 @@ export class LocalRoom {
   scheduleAgent() {
     clearTimeout(this.timer);
     const game = this.state.game;
-    if (this.disposed || this.state.mode !== 'ai' || game.winner !== null || game.current !== 1 || this.thinking) return;
+    if (this.disposed || this.state.mode !== 'ai' || game.winner !== null || game.current === this.seat || this.thinking) return;
     this.timer = setTimeout(async () => {
       const revision = this.state.game.revision;
       this.thinking = true;
