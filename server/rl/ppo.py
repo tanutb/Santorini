@@ -35,6 +35,7 @@ class PPOConfig:
     epochs: int = 4
     minibatch: int = 2048
     train_policy: bool = True
+    entropy_coef: float = 0.0  # Optional exploration bonus; zero preserves the original objective.
 
 
 def compute_gae(rewards: torch.Tensor, values: torch.Tensor, next_values: torch.Tensor,
@@ -106,8 +107,10 @@ def update(model: SeparateActorCritic, optimizers: tuple[torch.optim.Optimizer, 
     steps, kl, stopped = 0, 0.0, False
     for ids in policy_schedule:
         old = take(old_log_probs, ids)
-        log_probs = model.pi(take(observations, ids), take(masks, ids)).log_prob(take(actions, ids))
+        distribution = model.pi(take(observations, ids), take(masks, ids))
+        log_probs = distribution.log_prob(take(actions, ids))
         loss = clipped_policy_loss(log_probs, old, take(advantage, ids), config.clip)
+        loss = loss - config.entropy_coef * distribution.entropy().mean()
         kl = (old - log_probs).mean().item()
         if kl > 1.5 * config.target_kl:
             stopped = True

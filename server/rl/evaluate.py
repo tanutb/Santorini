@@ -13,7 +13,7 @@ import torch
 
 from server.rl.arena import match
 
-BASELINE_ORDER = ("random", "tactical", "lookahead")
+BASELINE_ORDER = ("random", "tactical", "lookahead", "climber")
 
 
 def evaluate(checkpoint_path: Path, games: int = 200, seed: int = 123, workers: int = 8) -> dict:

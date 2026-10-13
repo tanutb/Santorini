@@ -92,7 +92,7 @@ def label(spec: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("checkpoint", type=Path)
-    parser.add_argument("--against", nargs="+", default=["random", "tactical", "lookahead"])
+    parser.add_argument("--against", nargs="+", default=["random", "tactical", "lookahead", "climber"])
     parser.add_argument("--games", type=int, default=200)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--workers", type=int, default=8)

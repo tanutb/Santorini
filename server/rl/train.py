@@ -230,15 +230,19 @@ def train(args: argparse.Namespace) -> None:
         start, total_steps, total_episodes = 0, 0, 0
     config.train_policy = not refit
     model = model.to(args.device).train()
-    for name in ("gamma", "gae_lambda", "clip", "pi_lr", "vf_lr", "train_pi_iters", "train_v_iters", "target_kl", "epochs", "minibatch"):
+    for name in ("gamma", "gae_lambda", "clip", "pi_lr", "vf_lr", "train_pi_iters", "train_v_iters", "target_kl", "epochs", "minibatch", "entropy_coef"):
         override = getattr(args, name, None)
         if override is not None:
             setattr(config, name, override)
+    if config.entropy_coef < 0 or not np.isfinite(config.entropy_coef):
+        raise ValueError("Entropy coefficient must be finite and non-negative.")
     # Separate Adam optimizers for the policy (theta) and value (phi) parameters, as in Spinning Up.
     optimizers = (torch.optim.Adam(model.pi.parameters(), lr=config.pi_lr), torch.optim.Adam(model.v.parameters(), lr=config.vf_lr))
     if checkpoint and checkpoint.get("optimizer") and not refit:
         optimizers[0].load_state_dict(checkpoint["optimizer"]["pi"])
         optimizers[1].load_state_dict(checkpoint["optimizer"]["v"])
+    for group in optimizers[1].param_groups:
+        group["lr"] = config.vf_lr
     # Optional linear decay of the policy learning rate over this run (`--final-pi-lr`).
     initial_rate = config.pi_lr
     final_rate = getattr(args, "final_pi_lr", None) or initial_rate
@@ -355,12 +359,13 @@ def main() -> None:
     parser.add_argument("--train-pi-iters", dest="train_pi_iters", type=int)
     parser.add_argument("--train-v-iters", dest="train_v_iters", type=int)
     parser.add_argument("--target-kl", dest="target_kl", type=float)
+    parser.add_argument("--entropy-coef", type=float, help="optional exploration bonus (default: 0)")
     parser.add_argument("--epochs", type=int, help="passes over the batch for each of lines 6 and 7")
     parser.add_argument("--minibatch", type=int, help="decisions per gradient step; 0 = Spinning Up's full-batch steps")
     parser.add_argument("--final-pi-lr", dest="final_pi_lr", type=float, help="decay the policy learning rate linearly to this")
     parser.add_argument("--refit-value", dest="refit_value", action="store_true",
                         help="with --resume: freeze the policy, reset the value network and train only it")
-    parser.add_argument("--mix", default="random=0.1,tactical=0.15,lookahead=0.35")
+    parser.add_argument("--mix", default="random=0.1,tactical=0.1,climber=0.2,lookahead=0.2")
     parser.add_argument("--fixed-opponent", action="append", default=[], type=Path)
     parser.add_argument("--snapshot-every", type=int, default=10)
     parser.add_argument("--pool-size", type=int, default=10)

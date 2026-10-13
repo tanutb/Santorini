@@ -77,8 +77,11 @@ def test_in_process_training_writes_a_loadable_checkpoint(tmp_path):
     assert checkpoint["metadata"]["updates"] == 2 and checkpoint["metadata"]["steps"] == 32
     assert checkpoint["config"]["train_pi_iters"] == 3 and checkpoint["config"]["gae_lambda"] == 0.97
     args.resume, args.updates = tmp_path / "ppo.pt", 1
+    args.vf_lr = 2e-4
     train(args)
-    assert torch.load(tmp_path / "ppo.pt", weights_only=True)["metadata"]["updates"] == 3
+    resumed = torch.load(tmp_path / "ppo.pt", weights_only=True)
+    assert resumed["metadata"]["updates"] == 3
+    assert resumed["optimizer"]["v"]["param_groups"][0]["lr"] == 2e-4
     assert len((tmp_path / "training.jsonl").read_text().splitlines()) == 3
     with pytest.raises(ValueError):
         parse_mix("random=0.8,lookahead=0.5")

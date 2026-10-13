@@ -102,8 +102,40 @@ def lookahead_action(game: Game, rng: random.Random) -> int:
     return best_action
 
 
+def climber_action(game: Game, rng: random.Random) -> int:
+    """Race one worker up adjacent towers, including isolated corner openings.
+
+    Deliberately ignores defence: this exposes policies that win against central
+    opponents but fail to race or approach a remote, repetitive climbing threat.
+    """
+    legal = game.legal_actions()
+    mine = game.workers[game.current]
+    if game.phase == "place":
+        corners = [cell for cell in (0, 4, 20, 24) if cell in legal]
+        if mine[0] < 0:
+            return rng.choice(corners or legal)
+        return max(corners or legal, key=lambda cell: (
+            abs(cell // 5 - mine[0] // 5) + abs(cell % 5 - mine[0] % 5), rng.random()))
+    if game.phase == "build":
+        height = game.heights[mine[game.selected]]
+        # Build a reachable step, not a dome or a tower too high to climb.
+        return max(legal, key=lambda cell: (
+            0 < game.heights[cell] + 1 <= min(height + 1, 3),
+            game.heights[cell] if game.heights[cell] < 3 else -1,
+            CENTER_DISTANCE[cell], rng.random()))
+    for action in legal:
+        worker, target = divmod(action - 25, 25)
+        if game.heights[mine[worker]] == 2 and game.heights[target] == 3:
+            return action
+    focused = [action for action in legal if action < 50] or legal
+    return max(focused, key=lambda action: (
+        game.heights[(action - 25) % 25],
+        CENTER_DISTANCE[(action - 25) % 25], rng.random()))
+
+
 BASELINES = {
     "random": lambda game, rng: rng.choice(game.legal_actions()),
     "tactical": tactical_action,
+    "climber": climber_action,
     "lookahead": lookahead_action,
 }

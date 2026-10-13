@@ -73,6 +73,7 @@
      "offset": 55883
     }
    ],
+   "sha256": "0a37e5693b66190ea17bdeaea01ad846d6f6fd6d265a2d29fb5a27f3ee33cce8",
    "metadata": {
     "steps": 450560,
     "episodes": 23631,
@@ -345,6 +346,7 @@
      "offset": 317639
     }
    ],
+   "sha256": "55278275b31362f0c852ee290e7feccbcd69960c3065bbdf0abbd90400847c7b",
    "metadata": {
     "steps": 1638400,
     "episodes": 94728,
@@ -387,7 +389,7 @@
     }
    },
    "versus": {
-    "early": 1.0
+    "early": 1
    }
   },
   {
@@ -774,51 +776,63 @@
      "offset": 395847
     }
    ],
+   "sha256": "5c0e770adcca7835c4c7156c3c33d17776758a1958cd1809a30dc0022bd23de2",
    "metadata": {
-    "steps": 36323328,
-    "episodes": 2000219,
-    "updates": 2217,
+    "steps": 37224448,
+    "episodes": 2049985,
+    "updates": 2657,
     "algorithm": "PPO-Clip, Spinning Up process (custom PyTorch)"
    },
    "evaluation": {
     "random": {
-     "games": 400,
-     "wins": 400,
+     "games": 200,
+     "wins": 200,
      "losses": 0,
      "draws": 0,
      "win_rate": 1.0,
      "confidence_95": [
-      0.9905,
+      0.9812,
       1.0
      ]
     },
     "tactical": {
-     "games": 400,
-     "wins": 395,
-     "losses": 5,
+     "games": 200,
+     "wins": 199,
+     "losses": 1,
      "draws": 0,
-     "win_rate": 0.9875,
+     "win_rate": 0.995,
      "confidence_95": [
-      0.9711,
-      0.9946
+      0.9722,
+      0.9991
      ]
     },
     "lookahead": {
-     "games": 400,
-     "wins": 400,
-     "losses": 0,
+     "games": 200,
+     "wins": 198,
+     "losses": 2,
      "draws": 0,
-     "win_rate": 1.0,
+     "win_rate": 0.99,
      "confidence_95": [
-      0.9905,
-      1.0
+      0.9643,
+      0.9973
+     ]
+    },
+    "climber": {
+     "games": 200,
+     "wins": 178,
+     "losses": 22,
+     "draws": 0,
+     "win_rate": 0.89,
+     "confidence_95": [
+      0.8391,
+      0.9262
      ]
     }
    },
    "versus": {
     "developing": 0.89,
-    "early": 1.0,
-    "previous": 0.785
+    "early": 0.995,
+    "previous": 0.57
    }
   }
  ]

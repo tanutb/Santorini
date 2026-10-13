@@ -10,7 +10,7 @@ import path from 'node:path';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const web = path.join(root, 'web'), dist = path.join(root, 'dist');
 const required = ['index.html', 'app.js', 'board.js', 'board-factory.js', 'three-board.js', 'island-models.js', 'engine.js', 'policy.js',
-  'agent-core.js', 'agent-worker.js', 'agent-client.js', 'local-game.js', 'symmetry.js', 'learn.html', 'learn.css', 'learn.js', 'learn-data.js', 'coach.js', 'config.js', 'styles.css', 'icon.svg',
+  'agent-core.js', 'tactics.js', 'agent-worker.js', 'agent-client.js', 'local-game.js', 'symmetry.js', 'learn.html', 'learn.css', 'learn.js', 'learn-data.js', 'coach.js', 'config.js', 'styles.css', 'icon.svg',
   'vendor/three.js', 'models/manifest.json'];
 for (const file of required) {
   if (!(await readFile(path.join(web, file), 'utf8')).trim()) throw new Error('Empty web asset: ' + file);

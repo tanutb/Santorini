@@ -6,6 +6,7 @@ Run after promoting a checkpoint:  python scripts/export_models.py
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -56,6 +57,7 @@ def export(entry: dict) -> dict:
     print(f"{file}: {spec}, {offset:,} parameters, {(OUTPUT / file).stat().st_size / 1024:.0f} KiB")
     versus = json.loads(VERSUS.read_text(encoding="utf8")).get(entry["id"], {}) if VERSUS.exists() else {}
     return {"id": entry["id"], "name": entry["name"], "file": file, "spec": spec, "parameters": offset, "tensors": tensors,
+            "sha256": hashlib.sha256((OUTPUT / file).read_bytes()).hexdigest(),
             "metadata": {key: metadata.get(key) for key in ("steps", "episodes", "updates", "algorithm")},
             "evaluation": evaluation, "versus": versus}
 
