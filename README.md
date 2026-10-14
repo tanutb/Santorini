@@ -1,4 +1,9 @@
+<div align="center">
+  
 # Santorini
+[Demo website](https://tanutb.github.io/Santorini/)
+
+</div>
 
 Classic Santorini on a 3D island. Play a neural-network opponent trained from scratch with our own PPO-Clip code, pass and play on one screen, or play a friend online.
 
